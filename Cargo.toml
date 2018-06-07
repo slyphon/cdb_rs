@@ -4,3 +4,4 @@ version = "0.1.0"
 authors = ["Jonathan D. Simms <jsimms@twitter.com>"]
 
 [dependencies]
+bytes = "0.4"
