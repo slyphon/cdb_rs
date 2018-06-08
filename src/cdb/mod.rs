@@ -151,6 +151,8 @@ impl CDB {
             .nth(0)
     }
 
+    // take a main_table record and return a vector of offsets to valid secondary table
+    // entries.
     fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
         let rng = ops::Range { start: 0, end: t_rec.num_ents };
         rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
@@ -182,5 +184,18 @@ impl CDB {
             .filter_map(|hp| self.get_kv(&hp))
             .map(|kv| kv.k)
             .collect()
+    }
+
+    pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
+        for kv in self.hash_pairs().iter().filter_map(|hp| self.get_kv(&hp)) {
+           write!(w, "+{},{}:", kv.k.len(), kv.v.len())?;
+           w.write(kv.k.as_ref())?;
+           write!(w, "->")?;
+           w.write(kv.v.as_ref())?;
+           write!(w, "\n")?;
+        }
+
+        write!(w, "\n")?;       // need a trailing newline
+        Ok(())
     }
 }
