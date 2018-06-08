@@ -68,6 +68,8 @@ impl CDB {
             table[i] = TableRec{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize};
         }
 
+        eprintln!("table loaded");
+
         table
     }
 
