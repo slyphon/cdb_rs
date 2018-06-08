@@ -2,6 +2,7 @@ use bytes::{Bytes, Buf, IntoBuf};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::ops;
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -81,17 +82,20 @@ impl CDB {
         Ok(CDB { main_table: CDB::load_main_table(x), data: bytes })
     }
 
-    fn hash_pair_at(&self, pos: usize) -> HashPair {
+    fn hash_pair_at(&self, pos: usize) -> Option<HashPair> {
         if pos < MAIN_TABLE_SIZE_BYTES {
             panic!("position {} was in the main table!", pos)
         }
 
         let mut b = self.data.slice(pos, pos+8).into_buf();
-
-        let hash = b.get_u32_le();
         let ptr = b.get_u32_le() as usize;
 
-        HashPair { hash, ptr }
+        if ptr == 0 {
+            None
+        } else {
+            let hash = b.get_u32_le();
+            Some(HashPair { hash, ptr })
+        }
     }
 
     fn get_kv_len(&self, posn: usize) -> KVLen {
@@ -117,16 +121,13 @@ impl CDB {
     // returns Some(KV) if found
     //
     fn get_kv_ent(&self, ptr: usize, ent: usize, needle: u32) -> Option<KV> {
-        let hp = self.hash_pair_at(ptr + (ent * END_TABLE_ENTRY_SIZE));
-
-        match hp.hash {
-            n if n == needle => self.get_kv(&hp),
+        match self.hash_pair_at(ptr + (ent * END_TABLE_ENTRY_SIZE)) {
+            Some(ref hp) if hp.hash == needle => self.get_kv(hp),
             _ => None,
         }
     }
 
-
-    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &str) -> Option<Bytes> {
         let kb = key.as_bytes();
         let hash = djb_hash(kb);
         let rec = self.main_table[hash%256];
@@ -137,27 +138,51 @@ impl CDB {
 
         let start_ent = (hash >> 8) % rec.num_ents;
 
-        let find = |ent: usize| -> Option<Vec<u8>> {
-            match self.get_kv_ent(rec.ptr, ent, hash as u32) {
-                Some(ref kv) if kv.k == kb => return Some(kv.k.to_vec()),
-                _ => None,
-            }
+        let find = |ent: usize| -> Option<Bytes> {
+            self.get_kv_ent(rec.ptr, ent, hash as u32)
+                .iter()
+                .find(|ref kv| kv.k == kb)
+                .map(|ref kv| kv.v.to_owned())
         };
 
         for ent in start_ent..rec.num_ents {
             match find(ent) {
-                Some(kv) => return Some(kv),
+                Some(vec) => return Some(vec),
                 None => continue
             }
         }
 
         for ent in 0..start_ent {
             match find(ent) {
-                Some(kv) => return Some(kv),
+                Some(vec) => return Some(vec),
                 None => continue
             }
         }
 
         None
+    }
+
+    fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
+        let rng = ops::Range { start: 0, end: t_rec.num_ents };
+        rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
+    }
+
+    fn end_table_entry_offsets(&self) -> Vec<usize> {
+       self.main_table
+           .iter()
+           .flat_map(|t_rec| { self.expand_table_rec_to_offsets(t_rec) })
+           .collect()
+    }
+
+    fn kvs(&self) -> Vec<KV> {
+        self.end_table_entry_offsets()
+            .iter()
+            .filter_map(|offset| self.hash_pair_at(*offset) )
+            .filter_map(|hp| self.get_kv(&hp) )
+            .collect()
+    }
+
+    pub fn keys(&self) -> Vec<Bytes> {
+        self.kvs().iter().map(|kv| kv.k.to_owned()).collect()
     }
 }
