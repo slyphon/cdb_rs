@@ -138,28 +138,17 @@ impl CDB {
 
         let start_ent = (hash >> 8) % rec.num_ents;
 
-        let find = |ent: usize| -> Option<Bytes> {
-            self.get_kv_ent(rec.ptr, ent, hash as u32)
-                .iter()
-                .find(|ref kv| kv.k == kb)
-                .map(|ref kv| kv.v.to_owned())
-        };
+        let rng_a = start_ent..rec.num_ents;
+        let rng_b = 0..start_ent;
 
-        for ent in start_ent..rec.num_ents {
-            match find(ent) {
-                Some(vec) => return Some(vec),
-                None => continue
-            }
-        }
-
-        for ent in 0..start_ent {
-            match find(ent) {
-                Some(vec) => return Some(vec),
-                None => continue
-            }
-        }
-
-        None
+        rng_a.chain(rng_b)
+            .filter_map(|ent| {
+                self.get_kv_ent(rec.ptr, ent, hash as u32)
+                    .iter()
+                    .find(|ref kv| kv.k == kb)
+                    .map(|ref kv| kv.v.to_owned())
+            })
+            .nth(0)
     }
 
     fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
@@ -167,6 +156,7 @@ impl CDB {
         rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
     }
 
+    // read through the main table and return a vector of offsets into the secondary table
     fn end_table_entry_offsets(&self) -> Vec<usize> {
        self.main_table
            .iter()
@@ -174,15 +164,23 @@ impl CDB {
            .collect()
     }
 
-    fn kvs(&self) -> Vec<KV> {
+    fn hash_pairs(&self) -> Vec<HashPair> {
         self.end_table_entry_offsets()
             .iter()
             .filter_map(|offset| self.hash_pair_at(*offset) )
+            .collect()
+    }
+
+    fn kvs(&self) -> Vec<KV> {
+        self.hash_pairs().iter()
             .filter_map(|hp| self.get_kv(&hp) )
             .collect()
     }
 
     pub fn keys(&self) -> Vec<Bytes> {
-        self.kvs().iter().map(|kv| kv.k.to_owned()).collect()
+        self.hash_pairs().iter()
+            .filter_map(|hp| self.get_kv(&hp))
+            .map(|kv| kv.k)
+            .collect()
     }
 }
