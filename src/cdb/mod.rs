@@ -1,8 +1,9 @@
+pub mod randoread;
+
 use bytes::{Bytes, Buf, IntoBuf};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::ops;
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -53,7 +54,6 @@ impl KV {
         write!(w, "\n")
     }
 }
-
 
 pub struct CDB {
     main_table: [TableRec; MAIN_TABLE_SIZE],
@@ -139,9 +139,8 @@ impl CDB {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<Bytes> {
-        let kb = key.as_bytes();
-        let hash = djb_hash(kb);
+    pub fn get(&self, key: &[u8]) -> Option<Bytes> {
+        let hash = djb_hash(key);
         let rec = self.main_table[hash%256];
 
         if rec.num_ents == 0 {
@@ -157,7 +156,7 @@ impl CDB {
             .filter_map(|ent| {
                 self.get_kv_ent(rec.ptr, ent, hash as u32)
                     .iter()
-                    .find(|ref kv| kv.k == kb)
+                    .find(|ref kv| kv.k == key)
                     .map(|ref kv| kv.v.to_owned())
             })
             .nth(0)

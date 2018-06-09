@@ -1,6 +1,7 @@
 extern crate cdb_rs;
 use std::env;
 use std::io;
+use std::path;
 
 use cdb_rs::cdb;
 
@@ -12,20 +13,29 @@ fn dump(filename: &str) -> io::Result<()> {
     db.dump(&mut handle)
 }
 
+fn randoread(filename: &str, iters: u64) -> io::Result<()> {
+    let db = cdb::CDB::load(filename)?;
+    cdb::randoread::run(&db, iters)
+}
+
 fn main() {
-    // let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
 
-    // if args.len() < 2 {
-    //     eprintln!("Usage: dump /path/to/data.cdb");
-    //     std::process::exit(1);
-    // }
+    let progname =
+        path::Path::new(&args[0])
+            .file_name()
+            .and_then(|fname| fname.to_str())
+            .unwrap_or("cdbrs");
 
-    // let filename = &args[1];
+    if args.len() < 2 {
+        eprintln!("Usage: {} /path/to/data.cdb", progname);
+        std::process::exit(1);
+    }
 
-    let filename = "dict.cdb";
+    let filename = &args[1];
 
     std::process::exit(
-        match dump(filename) {
+        match randoread(filename, 100000) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);
