@@ -2,6 +2,7 @@ extern crate cdb_rs;
 use std::env;
 use std::io;
 use std::path;
+use std::time::Duration;
 
 use cdb_rs::cdb;
 
@@ -13,9 +14,21 @@ fn dump(filename: &str) -> io::Result<()> {
     db.dump(&mut handle)
 }
 
+fn dur2sec(d: &Duration) -> f64  {
+    d.as_secs() as f64 + (d.subsec_nanos() as f64 * 1e-9)
+}
+
+
 fn randoread(filename: &str, iters: u64) -> io::Result<()> {
     let db = cdb::CDB::load(filename)?;
-    cdb::randoread::run(&db, iters)
+    let d = cdb::randoread::run(&db, iters)?;
+    let d2f = dur2sec(&d);
+    let rate = iters as f64 / d2f;
+
+    eprintln!(
+        "{} iters in {} sec, {} op/sec", iters, d2f, rate
+    );
+    Ok(())
 }
 
 fn main() {
@@ -35,7 +48,7 @@ fn main() {
     let filename = &args[1];
 
     std::process::exit(
-        match randoread(filename, 100000) {
+        match randoread(filename, 7000000) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);
