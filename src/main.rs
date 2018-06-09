@@ -18,7 +18,6 @@ fn dur2sec(d: &Duration) -> f64  {
     d.as_secs() as f64 + (d.subsec_nanos() as f64 * 1e-9)
 }
 
-
 fn randoread(filename: &str, iters: u64) -> io::Result<()> {
     let db = cdb::CDB::load(filename)?;
     let d = cdb::randoread::run(&db, iters)?;
@@ -48,7 +47,7 @@ fn main() {
     let filename = &args[1];
 
     std::process::exit(
-        match randoread(filename, 7000000) {
+        match randoread(filename, 100_000_000) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);

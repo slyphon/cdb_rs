@@ -4,6 +4,7 @@ use bytes::{Bytes, Buf, IntoBuf};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use rand::{thread_rng, Rng};
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -173,11 +174,8 @@ impl CDB {
     // take a main_table record and return a vector of offsets to valid secondary table
     // entries.
     fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
-        eprintln!("expanding {} ents", t_rec.num_ents);
-
         let rng = 0..t_rec.num_ents;
         let offsets: Vec<usize> = rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect();
-        eprintln!("expanded table to offsets, len: {}", offsets.len());
         offsets
     }
 
@@ -207,6 +205,26 @@ impl CDB {
             .filter_map(|hp| self.get_kv(&hp))
             .map(|kv| kv.k)
             .collect()
+    }
+
+    pub fn sample_keys(&self, probability: f32, maxnum: usize) -> Vec<Bytes> {
+        let mut vec: Vec<Bytes> = Vec::new();
+        let mut rng = thread_rng();
+
+        for hp in self.hash_pairs().iter() {
+            let rf: f32 = rng.gen();
+            if rf < probability {
+                match self.get_kv(&hp) {
+                    Some(kv) => vec.push(kv.k),
+                    _ => continue
+                }
+            }
+            if vec.len() >= maxnum {
+                break
+            }
+        }
+
+        vec
     }
 
     pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
