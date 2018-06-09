@@ -13,8 +13,16 @@ const DATA_HEADER_SIZE: usize = 8;
 
 pub fn djb_hash(bytes: &[u8]) -> usize {
     let mut h = STARTING_HASH;
+
     for b in bytes {
-        h = ((h << 5) + h) ^ ((*b as u32) & 0xffffffff)
+        // wrapping here is explicitly for allowing overflow semantics:
+        //
+        //   Operations like + on u32 values is intended to never overflow,
+        //   and in some debug configurations overflow is detected and results in a panic.
+        //   While most arithmetic falls into this category, some code explicitly expects
+        //   and relies upon modular arithmetic (e.g., hashing)
+        //
+        h = h.wrapping_shl(5).wrapping_add(h) ^ (*b as u32)
     }
     h as usize
  }
