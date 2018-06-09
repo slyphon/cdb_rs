@@ -44,6 +44,16 @@ struct KV {
     v: Bytes,
 }
 
+impl KV {
+    fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "+{},{}:", self.k.len(), self.v.len())?;
+        w.write(self.k.as_ref())?;
+        write!(w, "->")?;
+        w.write(self.v.as_ref())?;
+        write!(w, "\n")
+    }
+}
+
 
 pub struct CDB {
     main_table: [TableRec; MAIN_TABLE_SIZE],
@@ -90,12 +100,12 @@ impl CDB {
         }
 
         let mut b = self.data.slice(pos, pos+8).into_buf();
+        let hash = b.get_u32_le();
         let ptr = b.get_u32_le() as usize;
 
         if ptr == 0 {
             None
         } else {
-            let hash = b.get_u32_le();
             Some(HashPair { hash, ptr })
         }
     }
@@ -156,8 +166,12 @@ impl CDB {
     // take a main_table record and return a vector of offsets to valid secondary table
     // entries.
     fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
-        let rng = ops::Range { start: 0, end: t_rec.num_ents };
-        rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
+        eprintln!("expanding {} ents", t_rec.num_ents);
+
+        let rng = 0..t_rec.num_ents;
+        let offsets: Vec<usize> = rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect();
+        eprintln!("expanded table to offsets, len: {}", offsets.len());
+        offsets
     }
 
     // read through the main table and return a vector of offsets into the secondary table
@@ -189,12 +203,15 @@ impl CDB {
     }
 
     pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
-        for kv in self.hash_pairs().iter().filter_map(|hp| self.get_kv(&hp)) {
-           write!(w, "+{},{}:", kv.k.len(), kv.v.len())?;
-           w.write(kv.k.as_ref())?;
-           write!(w, "->")?;
-           w.write(kv.v.as_ref())?;
-           write!(w, "\n")?;
+        for kv in self.end_table_entry_offsets()
+            .iter()
+            .filter_map(|offset| self.hash_pair_at(*offset))
+            .filter_map(|hp| self.get_kv(&hp)) {
+
+            match kv.dump(w) {
+                Err(err) => return Err(err),
+                _ => continue,
+            }
         }
 
         write!(w, "\n")?;       // need a trailing newline

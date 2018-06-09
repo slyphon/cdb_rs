@@ -13,14 +13,16 @@ fn dump(filename: &str) -> io::Result<()> {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    // let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 {
-        eprintln!("Usage: dump /path/to/data.cdb");
-        std::process::exit(1);
-    }
+    // if args.len() < 2 {
+    //     eprintln!("Usage: dump /path/to/data.cdb");
+    //     std::process::exit(1);
+    // }
 
-    let filename = &args[1];
+    // let filename = &args[1];
+
+    let filename = "dict.cdb";
 
     std::process::exit(
         match dump(filename) {
