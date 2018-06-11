@@ -79,7 +79,6 @@ impl fmt::Display for WriterError {
 }
 
 struct Parser {
-    input: BufReader<Box<Read>>,
     eof: bool,
 }
 
@@ -96,11 +95,11 @@ const ARROW_BYTES: &[u8; 2] = b"->";
 
 impl Parser {
     // format: +1,3:a->xyz\n
-    fn read_begin(&mut self) -> Result<Option<()>, WriterError> {
+    fn read_begin<T: Read>(&mut self, input: &mut BufReader<T>) -> Result<Option<()>, WriterError> {
         let mut buf: [u8; 1] = [0; 1];
 
         // consume a '+'
-        self.input.read_exact(&mut buf)?;
+        input.read_exact(&mut buf)?;
 
         match buf[0] {
             PLUS => Ok(Some(())),
@@ -109,10 +108,10 @@ impl Parser {
         }
     }
 
-    fn read_sizes(&mut self) -> Result<KVSizes, WriterError> {
+    fn read_sizes<T: Read>(&mut self, input: &mut BufReader<T>) -> Result<KVSizes, WriterError> {
         let mut buf: Vec<u8> = Vec::new();
 
-        let r = self.input.read_until(COMMA, &mut buf)?;
+        let r = input.read_until(COMMA, &mut buf)?;
 
         assert!(r > 0);
         assert_eq!(COMMA, buf[buf.len()-1]);
@@ -121,7 +120,7 @@ impl Parser {
         let k = parse_digits(&buf)?;
         buf.clear();
 
-        let r = self.input.read_until(COLON, &mut buf)?;
+        let r = input.read_until(COLON, &mut buf)?;
 
         assert!(r > 0);
         assert_eq!(COLON, buf.pop().unwrap());
@@ -130,54 +129,57 @@ impl Parser {
         Ok(KVSizes(k, v))
     }
 
-    fn read_kv(&mut self, kvs: &KVSizes) -> Result<KV, WriterError> {
+    fn read_kv<T: Read>(&mut self, input: &mut BufReader<T>, kvs: &KVSizes) -> Result<KV, WriterError> {
         let KVSizes(ksize, vsize) = kvs;
 
         let mut kbytes = Vec::with_capacity(*ksize);
-        self.input.read_exact(&mut kbytes)?;
+        input.read_exact(&mut kbytes)?;
 
         // consume the "->" between k and v
         let mut arrowbytes: [u8; 2] = [0; 2];
-        self.input.read_exact(&mut arrowbytes)?;
+        input.read_exact(&mut arrowbytes)?;
         assert_eq!(arrowbytes, *ARROW_BYTES);
 
         let mut vbytes = Vec::with_capacity(*vsize);
-        self.input.read_exact(&mut vbytes)?;
+        input.read_exact(&mut vbytes)?;
 
         Ok(KV { k: Bytes::from(kbytes), v: Bytes::from(vbytes) })
     }
 
-    fn read_one_record(&mut self) -> Result<Option<KV>, WriterError> {
+    fn read_one_record<T: Read>(&mut self, input: &mut BufReader<T>) -> Result<Option<KV>, WriterError> {
         if self.eof {
             Ok(None)
         } else {
-            match self.read_begin()? {
+            match self.read_begin(input)? {
                 None => {
                     self.eof = true;
                     Ok(None)
                 },
                 Some(_) =>
-                    self.read_sizes()
-                        .and_then(|sizes| self.read_kv(&sizes))
+                    self.read_sizes(input)
+                        .and_then(|sizes| self.read_kv(input, &sizes))
                         .map(|kv| Some(kv))
             }
         }
     }
 
-    pub fn iter<'a>(&'a mut self) -> IterParser<'a> { IterParser{inner: self} }
+    pub fn iter<'a, T: Read + 'a>(&'a mut self, buf: &'a mut BufReader<T>) -> IterParser<'a, T> {
+        IterParser{parser: self, buf}
+    }
 
-    pub fn new(buf: BufReader<Box<Read>>) -> Parser { Parser{input: buf, eof: false} }
+    pub fn new() -> Parser { Parser{eof: false} }
 }
 
-struct IterParser<'a> {
-    inner: &'a mut Parser
+struct IterParser<'a, T: Read + 'a> {
+    parser: &'a mut Parser,
+    buf: &'a mut BufReader<T>
 }
 
-impl<'a> Iterator for IterParser<'a> {
+impl<'a, T: Read + 'a> Iterator for IterParser<'a, T> {
     type Item = Result<KV, WriterError>;
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        match self.inner.read_one_record() {
+        match self.parser.read_one_record(self.buf) {
             Ok(Some(kv)) => Some(Ok(kv)),
             Ok(None)     => None,
             Err(err)     => Some(Err(err)),
@@ -202,9 +204,10 @@ mod tests {
 
         let reader = buf.reader();
 
-        let mut parser = Parser::new(BufReader::new(Box::new(reader)));
+        let mut br = BufReader::new(reader);
+        let mut parser = Parser::new();
 
-        let recs: Vec<Result<KV, WriterError>> = parser.iter().collect();
+        let recs: Vec<Result<KV, WriterError>> = parser.iter(&mut br).collect();
         assert_eq!(recs.len(), 1);
 
         match recs[0] {
