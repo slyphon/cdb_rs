@@ -1,6 +1,6 @@
 #[allow(dead_code)]
 
-use bytes::{Bytes,BytesMut, BufMut};
+use bytes::*;
 
 use std::error;
 use std::fs::File;
@@ -78,8 +78,9 @@ impl fmt::Display for WriterError {
     }
 }
 
-struct Parser<R: Read> {
-    input: BufReader<R>
+struct Parser {
+    input: BufReader<Box<Read>>,
+    eof: bool,
 }
 
 fn parse_digits(buf: &[u8]) -> Result<usize, WriterError> {
@@ -93,32 +94,23 @@ fn parse_digits(buf: &[u8]) -> Result<usize, WriterError> {
 
 const ARROW_BYTES: &[u8; 2] = b"->";
 
-impl<R: Read> Parser<R> {
+impl Parser {
     // format: +1,3:a->xyz\n
     fn read_begin(&mut self) -> Result<Option<()>, WriterError> {
-        let mut buf: Vec<u8> = Vec::new();
+        let mut buf: [u8; 1] = [0; 1];
 
         // consume a '+'
-        let r = self.input.read_until(PLUS, &mut buf)?;
-
-        assert_eq!(r, 1);
+        self.input.read_exact(&mut buf)?;
 
         match buf[0] {
             PLUS => Ok(Some(())),
-            NL => Ok(None),
-            wat => panic!("encountered unexpected char: {}", wat),
+            NL   => Ok(None),
+            wat  => panic!("encountered unexpected char: {}", wat),
         }
     }
 
     fn read_sizes(&mut self) -> Result<KVSizes, WriterError> {
         let mut buf: Vec<u8> = Vec::new();
-
-        // consume a '+'
-        let r = self.input.read_until(PLUS, &mut buf)?;
-
-        assert_eq!(r, 1);
-        assert_eq!(buf[0], PLUS);
-        buf.clear();
 
         let r = self.input.read_until(COMMA, &mut buf)?;
 
@@ -156,26 +148,71 @@ impl<R: Read> Parser<R> {
     }
 
     fn read_one_record(&mut self) -> Result<Option<KV>, WriterError> {
-        match self.read_begin()? {
-            None => Ok(None),
-            Some(_) =>
-                self.read_sizes()
-                    .and_then(|sizes| self.read_kv(&sizes))
-                    .map(|kv| Some(kv))
+        if self.eof {
+            Ok(None)
+        } else {
+            match self.read_begin()? {
+                None => {
+                    self.eof = true;
+                    Ok(None)
+                },
+                Some(_) =>
+                    self.read_sizes()
+                        .and_then(|sizes| self.read_kv(&sizes))
+                        .map(|kv| Some(kv))
+            }
         }
     }
 
-    pub fn iter<'a>(&'a mut self) -> Box<Iterator<Item=Result<Option<KV>, WriterError>> + 'a> {
-        
-    }
+    pub fn iter<'a>(&'a mut self) -> IterParser<'a> { IterParser{inner: self} }
 
-    pub fn new<T: Read>(buf: BufReader<T>) -> Parser<T> {
-        Parser{input: buf}
+    pub fn new(buf: BufReader<Box<Read>>) -> Parser { Parser{input: buf, eof: false} }
+}
+
+struct IterParser<'a> {
+    inner: &'a mut Parser
+}
+
+impl<'a> Iterator for IterParser<'a> {
+    type Item = Result<KV, WriterError>;
+
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        match self.inner.read_one_record() {
+            Ok(Some(kv)) => Some(Ok(kv)),
+            Ok(None)     => None,
+            Err(err)     => Some(Err(err)),
+        }
     }
 }
 
-// expects input in
+
+// expects input in CDB format '+ks,vs:k->v\n'
 pub fn write(input: &mut File) {
     let buf = BufReader::new(input);
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_read_one_record() {
+        let buf = Bytes::from("+3,4:cat->ball\n\n").into_buf();
+
+        let reader = buf.reader();
+
+        let mut parser = Parser::new(BufReader::new(Box::new(reader)));
+
+        let recs: Vec<Result<KV, WriterError>> = parser.iter().collect();
+        assert_eq!(recs.len(), 1);
+
+        match recs[0] {
+            Ok(KV{ref k, ref v}) => {
+                assert_eq!(k, "cat");
+                assert_eq!(v, "ball");
+            }
+            Err(ref x) => panic!("should not have errored")
+        }
+    }
+}
