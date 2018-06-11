@@ -40,10 +40,6 @@ struct TableRec {
     num_ents: usize,
 }
 
-impl TableRec {
-    const EMPTY: TableRec = TableRec{ptr: 0, num_ents: 0};
-}
-
 struct KVLen {
     k: usize,
     v: usize,
@@ -65,12 +61,12 @@ impl KV {
 }
 
 pub struct CDB {
-    main_table: [TableRec; MAIN_TABLE_SIZE],
+    main_table: Vec<TableRec>,
     data: Bytes,
 }
 
 impl CDB {
-    fn load_main_table(b: Bytes) -> [TableRec; MAIN_TABLE_SIZE] {
+    fn load_main_table(b: Bytes) -> Vec<TableRec> {
         let mut buf = b.into_buf();
 
         if buf.remaining() != MAIN_TABLE_SIZE_BYTES {
@@ -81,11 +77,13 @@ impl CDB {
             );
         }
 
-        let mut table: [TableRec; MAIN_TABLE_SIZE] = [TableRec::EMPTY; MAIN_TABLE_SIZE];
+        let mut table: Vec<TableRec> = Vec::new();
 
-        for i in 0..MAIN_TABLE_SIZE {
-            table[i] = TableRec{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize};
+        for _ in 0..MAIN_TABLE_SIZE {
+            table.push(TableRec{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize});
         }
+
+        table.shrink_to_fit();
 
         eprintln!("table loaded");
 
@@ -173,7 +171,7 @@ impl CDB {
 
     // take a main_table record and return a vector of offsets to valid secondary table
     // entries.
-    fn expand_table_rec_to_offsets(&self, t_rec: &TableRec) -> Vec<usize> {
+    fn expand_table_rec_to_offsets(t_rec: &TableRec) -> Vec<usize> {
         let rng = 0..t_rec.num_ents;
         let offsets: Vec<usize> = rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect();
         offsets
@@ -183,7 +181,7 @@ impl CDB {
     fn end_table_entry_offsets(&self) -> Vec<usize> {
        self.main_table
            .iter()
-           .flat_map(|t_rec| { self.expand_table_rec_to_offsets(t_rec) })
+           .flat_map(|t_rec| { CDB::expand_table_rec_to_offsets(t_rec) })
            .collect()
     }
 
@@ -200,6 +198,15 @@ impl CDB {
             .collect()
     }
 
+    fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
+        Box::new(
+            self.main_table.iter()
+                .flat_map(|t_rec| { CDB::expand_table_rec_to_offsets(t_rec) })
+                .filter_map(move |offset| self.hash_pair_at(offset))
+                .filter_map(move |hp| self.get_kv(&hp))
+        )
+    }
+
     pub fn keys(&self) -> Vec<Bytes> {
         self.hash_pairs().iter()
             .filter_map(|hp| self.get_kv(&hp))
@@ -207,32 +214,8 @@ impl CDB {
             .collect()
     }
 
-    pub fn sample_keys(&self, probability: f32, maxnum: usize) -> Vec<Bytes> {
-        let mut vec: Vec<Bytes> = Vec::new();
-        let mut rng = thread_rng();
-
-        for hp in self.hash_pairs().iter() {
-            let rf: f32 = rng.gen();
-            if rf < probability {
-                match self.get_kv(&hp) {
-                    Some(kv) => vec.push(kv.k),
-                    _ => continue
-                }
-            }
-            if vec.len() >= maxnum {
-                break
-            }
-        }
-
-        vec
-    }
-
     pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
-        for kv in self.end_table_entry_offsets()
-            .iter()
-            .filter_map(|offset| self.hash_pair_at(*offset))
-            .filter_map(|hp| self.get_kv(&hp)) {
-
+        for kv in self.kvs_iter() {
             match kv.dump(w) {
                 Err(err) => return Err(err),
                 _ => continue,
