@@ -1,4 +1,5 @@
 pub mod randoread;
+pub mod writer;
 
 use bytes::{Bytes, Buf, IntoBuf};
 use std::fs::File;
