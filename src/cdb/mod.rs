@@ -1,5 +1,7 @@
 pub mod randoread;
 pub mod writer;
+pub mod input;
+pub mod errors;
 
 use bytes::{Bytes, Buf, IntoBuf};
 use std::fs::File;
@@ -46,7 +48,7 @@ struct KVLen {
     v: usize,
 }
 
-struct KV {
+pub struct KV {
     k: Bytes,
     v: Bytes,
 }
