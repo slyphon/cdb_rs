@@ -3,9 +3,7 @@ use rand::{thread_rng, Rng};
 use std::io;
 use std::time::{Instant,Duration};
 
-use other_cdb::CDB as OCDB;
-
-pub fn run(db: &super::CDB, ocdb: &mut OCDB, iters: u64) -> io::Result<Duration> {
+pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
     let mut rng = thread_rng();
 
     let keys = {
@@ -26,34 +24,18 @@ pub fn run(db: &super::CDB, ocdb: &mut OCDB, iters: u64) -> io::Result<Duration>
     let mut hit = 0;
     let mut miss = 0;
 
-    let mut ohit = 0;
-    let mut omiss = 0;
-
     for _ in 0..iters {
         match rng.choose(&keys) {
             Some(k) => {
                 if db.get(k).is_some() { hit += 1 } else { miss += 1 }
-                let x: Vec<::std::result::Result<Vec<u8>, io::Error>> = ocdb.find(k).collect();
-
-                if x.len() > 0 {
-                    ohit += 1
-                } else {
-                    omiss += 1
-                }
-
             }
-
-
-
             None => continue
         };
     }
 
     let hitrate = (hit as f64 / iters as f64) * 100.0;
-    let ohitrate = (ohit as f64 / iters as f64) * 100.0;
 
     debug!("hit: {}, miss: {}, ratio: {ratio:.*}%", hit, miss, 3, ratio=hitrate);
-    debug!("ohit: {}, omiss: {}, ratio: {ratio:.*}%", ohit, omiss, 3, ratio=ohitrate);
 
     Ok(start.elapsed())
 }

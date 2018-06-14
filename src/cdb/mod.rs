@@ -246,3 +246,9 @@ impl CDB {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+mod test {
+    use tinycdb::Cdb as TCDB;
+}
