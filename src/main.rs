@@ -3,10 +3,13 @@ extern crate cdb_rs;
 extern crate log;
 extern crate env_logger;
 
+extern crate cdb as other_cdb;
+
 use std::env;
 use std::io;
 use std::path;
 use std::time::Duration;
+use std::fs;
 
 use cdb_rs::cdb;
 
@@ -25,7 +28,11 @@ fn dur2sec(d: &Duration) -> f64  {
 
 fn randoread(filename: &str, iters: u64) -> io::Result<()> {
     let db = cdb::CDB::load(filename)?;
-    let d = cdb::randoread::run(&db, iters)?;
+
+    let fp = fs::File::open(filename)?;
+    let mut odb = other_cdb::CDB::new(fp)?;
+
+    let d = cdb::randoread::run(&db, &mut odb, iters)?;
     let d2f = dur2sec(&d);
     let rate = iters as f64 / d2f;
 

@@ -10,3 +10,5 @@ memmap = "0.6.2"
 itertools = "0.6"
 log = "0.4"
 env_logger = "0.5.10"
+cdb = "0.5.0"
+
