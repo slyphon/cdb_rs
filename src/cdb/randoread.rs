@@ -21,12 +21,24 @@ pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
     eprintln!("starting test using {} sampled keys", keys.len());
     let start = Instant::now();
 
+    let mut hit = 0;
+    let mut miss = 0;
+
     for _ in 0..iters {
         match rng.choose(&keys) {
-            Some(k) => db.get(k),
+            Some(k) =>
+                if db.get(k).is_some() {
+                    hit += 1
+                } else {
+                    miss += 1
+                }
             None => continue
         };
     }
+
+    let hitrate = (hit as f64 / iters as f64) * 100.0;
+
+    debug!("hit: {}, miss: {}, ratio: {ratio:.*}%", hit, miss, 3, ratio=hitrate);
 
     Ok(start.elapsed())
 }

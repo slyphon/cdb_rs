@@ -1,4 +1,8 @@
 extern crate cdb_rs;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
 use std::env;
 use std::io;
 use std::path;
@@ -25,13 +29,14 @@ fn randoread(filename: &str, iters: u64) -> io::Result<()> {
     let d2f = dur2sec(&d);
     let rate = iters as f64 / d2f;
 
-    eprintln!(
+    info!(
         "{} iters in {} sec, {} op/sec", iters, d2f, rate
     );
     Ok(())
 }
 
 fn main() {
+    env_logger::init();
     let args: Vec<String> = env::args().collect();
 
     let progname =

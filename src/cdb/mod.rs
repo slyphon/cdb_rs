@@ -42,6 +42,39 @@ struct TableRec {
     num_ents: usize,
 }
 
+struct TableRecIter {
+    // index of the end table entry, used to compute the offset
+    idx: usize,
+    rec: TableRec,
+}
+
+impl TableRecIter {
+    fn new(rec: TableRec) -> Self {
+        TableRecIter{ idx: 0, rec}
+    }
+}
+
+impl Iterator for TableRecIter {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cur = self.idx;
+        // rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
+        if self.idx < self.rec.num_ents {
+            self.idx += 1;
+            Some(self.rec.ptr + (cur * END_TABLE_ENTRY_SIZE))
+        } else {
+            None
+        }
+    }
+}
+
+impl TableRec {
+    fn iter(&self) -> TableRecIter {
+        TableRecIter::new(self.clone())
+    }
+}
+
 struct KVLen {
     k: usize,
     v: usize,
@@ -87,7 +120,7 @@ impl CDB {
 
         table.shrink_to_fit();
 
-        eprintln!("table loaded");
+        debug!("table loaded");
 
         table
     }
@@ -161,53 +194,44 @@ impl CDB {
         let rng_a = start_ent..rec.num_ents;
         let rng_b = 0..start_ent;
 
-        rng_a.chain(rng_b)
-            .filter_map(|ent| {
-                self.get_kv_ent(rec.ptr, ent, hash as u32)
-                    .iter()
-                    .find(|ref kv| kv.k == key)
-                    .map(|ref kv| kv.v.to_owned())
-            })
-            .nth(0)
+        for ent in rng_a.chain(rng_b) {
+            if let Some(ref kv) = self.get_kv_ent(rec.ptr, ent, hash as u32) {
+                if kv.k == key {
+                    return Some(kv.v.clone())
+                } else {
+                    continue
+                }
+            } else {
+                break
+            }
+        }
+
+        None
     }
 
-    // take a main_table record and return a vector of offsets to valid secondary table
-    // entries.
-    fn expand_table_rec_to_offsets(t_rec: &TableRec) -> Vec<usize> {
-        let rng = 0..t_rec.num_ents;
-        let offsets: Vec<usize> = rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect();
-        offsets
+    // Returns an iterator of every offset to every known entry in the secondary table
+    fn end_table_offset_iter<'a>(&'a self) -> Box<Iterator<Item=usize> + 'a> {
+        let iter_of_iters = self.main_table.iter().map(|t_rec| t_rec.iter());
+        
+        // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
+        Box::new(::itertools::Itertools::flatten(iter_of_iters))
     }
 
-    // read through the main table and return a vector of offsets into the secondary table
-    fn end_table_entry_offsets(&self) -> Vec<usize> {
-       self.main_table
-           .iter()
-           .flat_map(|t_rec| { CDB::expand_table_rec_to_offsets(t_rec) })
-           .collect()
-    }
-
-    fn hash_pairs(&self) -> Vec<HashPair> {
-        self.end_table_entry_offsets()
-            .iter()
-            .filter_map(|offset| self.hash_pair_at(*offset) )
-            .collect()
+    fn hash_pairs<'a>(&'a self) -> Box<Iterator<Item=HashPair> + 'a> {
+        Box::new(
+            self.end_table_offset_iter()
+                .filter_map(move |offset| self.hash_pair_at(offset) )
+        )
     }
 
     fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
         Box::new(
-            self.main_table.iter()
-                .flat_map(|t_rec| { CDB::expand_table_rec_to_offsets(t_rec) })
-                .filter_map(move |offset| self.hash_pair_at(offset))
-                .filter_map(move |hp| self.get_kv(&hp))
+            self.hash_pairs().filter_map(move |hp| self.get_kv(&hp))
         )
     }
 
     pub fn keys(&self) -> Vec<Bytes> {
-        self.hash_pairs().iter()
-            .filter_map(|hp| self.get_kv(&hp))
-            .map(|kv| kv.k)
-            .collect()
+        self.kvs_iter().map(|kv| kv.k).collect()
     }
 
     pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {

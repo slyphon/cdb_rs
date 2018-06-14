@@ -6,3 +6,7 @@ authors = ["Jonathan D. Simms <jsimms@twitter.com>"]
 [dependencies]
 bytes = "0.4"
 rand = "0.5"
+memmap = "0.6.2"
+itertools = "0.6"
+log = "0.4"
+env_logger = "0.5.10"
