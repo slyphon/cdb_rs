@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use rand;
 use rand::{thread_rng, Rng};
 use std::io;
 use std::time::{Instant,Duration};

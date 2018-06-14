@@ -1,25 +1,15 @@
 use bytes::*;
-
-use std::error;
-use std::fs::File;
-use std::io;
-use std::io::{BufReader,BufWriter};
+use std::io::BufReader;
 use std::io::prelude::*;
-use std::num::ParseIntError;
 use std::str;
-use std::str::Utf8Error;
-use std::fmt;
-
-use super::KV;
 use super::errors::WriterError;
+use super::KV;
 
 struct KVSizes(usize, usize);
 
 const PLUS: u8  = 0x2b; // ASCII '+'
 const COMMA: u8 = 0x2c; // ASCII ','
 const COLON: u8 = 0x3a; // ASCII ':'
-const DASH: u8  = 0x2a; // ASCII '-'
-const GT: u8    = 0x3e; // ASCII '>'
 const NL: u8    = 0x0a; // ASCII '\n'
 
 fn parse_digits(buf: &[u8]) -> Result<usize, WriterError> {
@@ -150,7 +140,7 @@ mod tests {
 
     #[test]
     fn parser_read_one_record() {
-        let mut reader = Bytes::from("+3,4:cat->ball\n\n").into_buf().reader();
+        let reader = Bytes::from("+3,4:cat->ball\n\n").into_buf().reader();
         let one = read_one_record(&mut BufReader::new(reader));
 
         match one {

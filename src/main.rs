@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use cdb_rs::cdb;
 
+#[allow(dead_code)]
 fn dump(filename: &str) -> io::Result<()> {
     let db = cdb::CDB::load(filename)?;
     let stdout = io::stdout();

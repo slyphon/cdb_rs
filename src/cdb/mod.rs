@@ -1,13 +1,12 @@
+use bytes::{Buf, Bytes, IntoBuf};
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+
 pub mod randoread;
 pub mod writer;
 pub mod input;
 pub mod errors;
-
-use bytes::{Bytes, Buf, IntoBuf};
-use std::fs::File;
-use std::io;
-use std::io::prelude::*;
-use rand::{thread_rng, Rng};
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -192,12 +191,6 @@ impl CDB {
         self.end_table_entry_offsets()
             .iter()
             .filter_map(|offset| self.hash_pair_at(*offset) )
-            .collect()
-    }
-
-    fn kvs(&self) -> Vec<KV> {
-        self.hash_pairs().iter()
-            .filter_map(|hp| self.get_kv(&hp) )
             .collect()
     }
 
