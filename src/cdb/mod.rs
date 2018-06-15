@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::sync::Arc;
+use std::collections::hash_map;
 
 pub mod randoread;
 pub mod errors;
@@ -106,11 +107,11 @@ impl KV {
     }
 }
 
-type BucketsTable = [Bucket; MAIN_TABLE_SIZE];
+type BucketsTable = Vec<Bucket>;
 
 pub struct CDB {
     main_table: BucketsTable,
-    data: Bytes,
+    data: Bytes
 }
 
 struct IndexEntry {
@@ -120,6 +121,18 @@ struct IndexEntry {
 }
 
 impl CDB {
+    #[allow(dead_code)]
+    pub fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
+        Box::new(
+            // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
+            ::itertools::Itertools::flatten(
+                self.main_table.iter()
+                    .map(move |bucket| bucket.iter(0))
+            )
+                .map(move |pos| self.get_kv(&self.index_entry_at(pos)))
+        )
+    }
+
     fn load_main_table(b: Bytes) -> BucketsTable {
         let mut buf = b.into_buf();
 
@@ -131,14 +144,10 @@ impl CDB {
             );
         }
 
-        let mut table = [Bucket {
-            ptr: 0,
-            num_ents: 0,
-        }; MAIN_TABLE_SIZE];
+        let mut table: Vec<Bucket> = Vec::with_capacity(MAIN_TABLE_SIZE);
 
-        for i in 0..MAIN_TABLE_SIZE {
-            table[i].ptr = buf.get_u32_le() as usize;
-            table[i].num_ents = buf.get_u32_le() as usize;
+        for _ in 0..MAIN_TABLE_SIZE {
+            table.push(Bucket{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize});
         }
 
         debug!("table loaded");
@@ -194,9 +203,7 @@ impl CDB {
         KV { k, v }
     }
 
-    pub fn get<'a, S>(&self, key: S) -> Option<Bytes>
-        where S: Into<&'a [u8]>
-    {
+    pub fn get<'a>(&self, key: &[u8]) -> Option<Bytes> {
         let key = key.into();
         let hash = CDBHash::new(key);
         let bucket = self.main_table[hash.table()];
@@ -222,18 +229,6 @@ impl CDB {
         }
 
         None
-    }
-
-    #[allow(dead_code)]
-    pub fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
-        Box::new(
-            // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
-            ::itertools::Itertools::flatten(
-                self.main_table.iter()
-                    .map(move |bucket| bucket.iter(0))
-            )
-                .map(move |pos| self.get_kv(&self.index_entry_at(pos)))
-        )
     }
 }
 
