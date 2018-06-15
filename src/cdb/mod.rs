@@ -300,7 +300,6 @@ mod tests {
         let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
         let cdb = create_temp_cdb(&kvs[..]).unwrap();
 
-
         xs.iter()
             .map(|x| {
                 let res = cdb.get(x.as_ref());
@@ -323,6 +322,33 @@ mod tests {
                     r
                 );
             }
+        }
+    }
+
+    use std::io::{BufReader, BufRead};
+    use std::fs::File;
+    use std::path::Path;
+
+//    #[test]
+//    fn test_with_dictionary() {
+//        let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
+//        let bufr = BufReader::new(&f);
+//
+//        let mut acc: Vec<String> = Vec::new();
+//
+//        for line in bufr.lines() {
+//            let word = line.unwrap();
+//            acc.push(word.to_owned());
+//
+//        }
+//    }
+
+    #[test]
+    fn read_small_list() {
+        let strings = vec!["shngcmfkqjtvhnbgfcvbm", "qjflpsvacyhsgxykbvarbvmxapufmdt", "a", "a", "a", "a", "a", "a", "xfjhaqjkcjiepmcbhopgpxwwth", "a", "a"];
+        let arg = strings.iter().map(|s| (*s).to_owned()).collect();
+        for QueryResult(q, r) in make_and_then_read(&arg) {
+            assert_eq!(Some(q), r);
         }
     }
 }
