@@ -8,7 +8,7 @@ use std::str::Utf8Error;
 pub enum WriterError {
     IOError(io::Error),
     UTF8Error(::std::str::Utf8Error),
-    ParseError(ParseIntError)
+    ParseError(ParseIntError),
 }
 
 impl From<ParseIntError> for WriterError {

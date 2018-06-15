@@ -1,12 +1,14 @@
 use bytes::{Buf, Bytes, IntoBuf};
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::sync::Arc;
 
+pub mod errors;
+pub mod input;
 pub mod randoread;
 pub mod writer;
-pub mod input;
-pub mod errors;
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -28,18 +30,35 @@ pub fn djb_hash(bytes: &[u8]) -> usize {
         h = h.wrapping_shl(5).wrapping_add(h) ^ (*b as u32)
     }
     h as usize
- }
+}
 
-#[derive(Copy,Clone,Debug)]
+#[derive(Copy, Clone)]
 struct HashPair {
     hash: u32,
     ptr: usize,
+    pos: usize, // the position of this hash pair in the table (mostly for debugging)
 }
 
-#[derive(Copy,Clone,Debug)]
+impl fmt::Debug for HashPair {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "HashPair {{ pos: {:>#010x}, hash: {:>#010x}, ptr: {:>#010x} }}",
+            self.pos, self.hash, self.ptr
+        )
+    }
+}
+
+#[derive(Copy, Clone)]
 struct TableRec {
     ptr: usize,
     num_ents: usize,
+}
+
+impl fmt::Debug for TableRec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "TableRec {{ ptr: {:>#010x}, num_ents: {:>#010x} }}", self.ptr, self.num_ents)
+    }
 }
 
 struct TableRecIter {
@@ -50,7 +69,7 @@ struct TableRecIter {
 
 impl TableRecIter {
     fn new(rec: TableRec) -> Self {
-        TableRecIter{ idx: 0, rec}
+        TableRecIter { idx: 0, rec }
     }
 }
 
@@ -59,7 +78,6 @@ impl Iterator for TableRecIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let cur = self.idx;
-        // rng.map({|j| t_rec.ptr + (j * END_TABLE_ENTRY_SIZE) }).collect()
         if self.idx < self.rec.num_ents {
             self.idx += 1;
             Some(self.rec.ptr + (cur * END_TABLE_ENTRY_SIZE))
@@ -80,6 +98,7 @@ struct KVLen {
     v: usize,
 }
 
+#[derive(Debug)]
 pub struct KV {
     k: Bytes,
     v: Bytes,
@@ -95,13 +114,16 @@ impl KV {
     }
 }
 
+type MainTable = [TableRec; MAIN_TABLE_SIZE];
+
+#[derive(Clone)]
 pub struct CDB {
-    main_table: Vec<TableRec>,
+    main_table: Arc<MainTable>,
     data: Bytes,
 }
 
 impl CDB {
-    fn load_main_table(b: Bytes) -> Vec<TableRec> {
+    fn load_main_table(b: Bytes) -> MainTable {
         let mut buf = b.into_buf();
 
         if buf.remaining() != MAIN_TABLE_SIZE_BYTES {
@@ -112,13 +134,15 @@ impl CDB {
             );
         }
 
-        let mut table: Vec<TableRec> = Vec::new();
+        let mut table = [TableRec {
+            ptr: 0,
+            num_ents: 0,
+        }; MAIN_TABLE_SIZE];
 
-        for _ in 0..MAIN_TABLE_SIZE {
-            table.push(TableRec{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize});
+        for i in 0..MAIN_TABLE_SIZE {
+            table[i].ptr = buf.get_u32_le() as usize;
+            table[i].num_ents = buf.get_u32_le() as usize;
         }
-
-        table.shrink_to_fit();
 
         debug!("table loaded");
 
@@ -133,7 +157,10 @@ impl CDB {
         let bytes = Bytes::from(buffer);
         let x = bytes.slice_to(MAIN_TABLE_SIZE_BYTES).clone();
 
-        Ok(CDB { main_table: CDB::load_main_table(x), data: bytes })
+        Ok(CDB {
+            main_table: Arc::new(CDB::load_main_table(x)),
+            data: bytes,
+        })
     }
 
     fn hash_pair_at(&self, pos: usize) -> Option<HashPair> {
@@ -141,14 +168,14 @@ impl CDB {
             panic!("position {} was in the main table!", pos)
         }
 
-        let mut b = self.data.slice(pos, pos+8).into_buf();
+        let mut b = self.data.slice(pos, pos + 8).into_buf();
         let hash = b.get_u32_le();
         let ptr = b.get_u32_le() as usize;
 
         if ptr == 0 {
             None
         } else {
-            Some(HashPair { hash, ptr })
+            Some(HashPair { pos, hash, ptr })
         }
     }
 
@@ -168,7 +195,7 @@ impl CDB {
         let k = self.data.slice(kstart, kstart + kvl.k);
         let v = self.data.slice(vstart, vstart + kvl.v);
 
-        Some(KV{k,v})
+        Some(KV { k, v })
     }
 
     // read the end table at ptr, entry ent, looking for needle,
@@ -183,10 +210,19 @@ impl CDB {
 
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
         let hash = djb_hash(key);
-        let rec = self.main_table[hash%256];
+        let rec = self.main_table[hash % 256];
+
+        trace!(
+            "get: key {}, hash: {:?}, table posn: {:?}, main rec: {:?}",
+            ::std::str::from_utf8(key).unwrap(),
+            hash,
+            hash % 256,
+            rec
+        );
 
         if rec.num_ents == 0 {
-            return None
+            trace!("extents empty, returning none");
+            return None;
         }
 
         let start_ent = (hash >> 8) % rec.num_ents;
@@ -194,15 +230,25 @@ impl CDB {
         let rng_a = start_ent..rec.num_ents;
         let rng_b = 0..start_ent;
 
+        trace!(
+            "searching range: {} -> {}, {} -> {}",
+            rng_a.start,
+            rng_a.end,
+            rng_b.start,
+            rng_b.end
+        );
+
         for ent in rng_a.chain(rng_b) {
+            trace!("get posn: {}", ent);
             if let Some(ref kv) = self.get_kv_ent(rec.ptr, ent, hash as u32) {
+                trace!("got kv: {:?}", kv);
                 if kv.k == key {
-                    return Some(kv.v.clone())
+                    return Some(kv.v.clone());
                 } else {
-                    continue
+                    continue;
                 }
             } else {
-                break
+                break;
             }
         }
 
@@ -210,24 +256,22 @@ impl CDB {
     }
 
     // Returns an iterator of every offset to every known entry in the secondary table
-    fn end_table_offset_iter<'a>(&'a self) -> Box<Iterator<Item=usize> + 'a> {
+    fn end_table_offset_iter<'a>(&'a self) -> Box<Iterator<Item = usize> + 'a> {
         let iter_of_iters = self.main_table.iter().map(|t_rec| t_rec.iter());
-        
+
         // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
         Box::new(::itertools::Itertools::flatten(iter_of_iters))
     }
 
-    fn hash_pairs<'a>(&'a self) -> Box<Iterator<Item=HashPair> + 'a> {
+    fn hash_pairs<'a>(&'a self) -> Box<Iterator<Item = HashPair> + 'a> {
         Box::new(
             self.end_table_offset_iter()
-                .filter_map(move |offset| self.hash_pair_at(offset) )
+                .filter_map(move |offset| self.hash_pair_at(offset)),
         )
     }
 
-    fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
-        Box::new(
-            self.hash_pairs().filter_map(move |hp| self.get_kv(&hp))
-        )
+    fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item = KV> + 'a> {
+        Box::new(self.hash_pairs().filter_map(move |hp| self.get_kv(&hp)))
     }
 
     pub fn keys(&self) -> Vec<Bytes> {
@@ -242,23 +286,41 @@ impl CDB {
             }
         }
 
-        write!(w, "\n")?;       // need a trailing newline
+        write!(w, "\n")?; // need a trailing newline
+        Ok(())
+    }
+
+    pub fn dump_debug(&self, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "--< main table >--\n")?;
+
+        for (i, t_rec) in self.main_table.iter().enumerate() {
+            if t_rec.num_ents == 0 {
+                continue;
+            }
+            writeln!(w, "{:>#08x} {:?}", i, t_rec)?;
+        }
+
+        write!(w, "\n--< extents >--\n")?;
+
+        for hash_pair in self.hash_pairs() {
+            writeln!(w, "{:?}", hash_pair)?;
+        }
+
         Ok(())
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use tinycdb::Cdb as TCDB;
-    use tempfile::NamedTempFile;
-    use std::fs::remove_file;
-    use std::collections::hash_set;
-    use std::path::PathBuf;
+    use super::*;
+    use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::string;
-    use proptest::collection::vec;
-    use super::*;
+    use std::collections::hash_set;
+    use std::fs::remove_file;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+    use tinycdb::Cdb as TCDB;
 
     fn arb_string_slice<'a>() -> BoxedStrategy<Vec<String>> {
         let st = string::string_regex("[a-z]+").unwrap();
@@ -275,7 +337,7 @@ mod tests {
             remove_file(ntf.path())?;
             path = ntf.path().to_owned();
         }
-        
+
         let mut dupcheck = hash_set::HashSet::new();
 
         TCDB::new(path.as_ref(), |c| {
@@ -296,27 +358,31 @@ mod tests {
         Ok(cdb)
     }
 
-    fn make_and_then_read(xs: &Vec<String>) -> Vec<QueryResult> {
-        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
-        let cdb = create_temp_cdb(&kvs[..]).unwrap();
+    type QueryResultIter<'a> = Box<Iterator<Item = QueryResult> + 'a>;
 
-        xs.iter()
-            .map(|x| {
-                let res = cdb.get(x.as_ref());
-                QueryResult(
-                    x.clone(),
-                    res.map(|v| String::from_utf8(v.to_vec()).unwrap())
-                )
-
-            })
-            .collect()
+    fn read_keys<'a>(cdb: CDB, xs: &'a Vec<String>) -> QueryResultIter<'a> {
+        Box::new(xs.iter().map(move |x| {
+            let res = cdb.get(x.as_ref());
+            QueryResult(
+                x.clone(),
+                res.map(|v| String::from_utf8(v.to_vec()).unwrap()),
+            )
+        }))
     }
 
+    fn make_temp_cdb_single_vals(xs: &Vec<String>) -> CDB {
+        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
+        create_temp_cdb(&kvs[..]).unwrap()
+    }
+
+    fn make_and_then_read<'a>(xs: &'a Vec<String>) -> QueryResultIter<'a> {
+        read_keys(make_temp_cdb_single_vals(xs), xs)
+    }
 
     proptest! {
         #[test]
         fn qc_key_and_value_retrieval(ref xs in arb_string_slice()) {
-            for QueryResult(q, r) in make_and_then_read(xs) {
+            for QueryResult(q, r) in make_and_then_read(xs){
                 prop_assert_eq!(
                     Some(q),
                     r
@@ -325,28 +391,49 @@ mod tests {
         }
     }
 
-    use std::io::{BufReader, BufRead};
     use std::fs::File;
+    use std::io::{BufRead, BufReader};
     use std::path::Path;
 
-//    #[test]
-//    fn test_with_dictionary() {
-//        let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
-//        let bufr = BufReader::new(&f);
-//
-//        let mut acc: Vec<String> = Vec::new();
-//
-//        for line in bufr.lines() {
-//            let word = line.unwrap();
-//            acc.push(word.to_owned());
-//
-//        }
-//    }
+    #[test]
+    fn test_with_dictionary() {
+        let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
+        let bufr = BufReader::new(&f);
+
+        let mut acc: Vec<String> = Vec::new();
+
+        for line in bufr.lines() {
+            let word = line.unwrap();
+            acc.push(word.to_owned());
+        }
+    }
+
+    use env_logger;
 
     #[test]
     fn read_small_list() {
-        let strings = vec!["shngcmfkqjtvhnbgfcvbm", "qjflpsvacyhsgxykbvarbvmxapufmdt", "a", "a", "a", "a", "a", "a", "xfjhaqjkcjiepmcbhopgpxwwth", "a", "a"];
+        env_logger::try_init().unwrap();
+
+        let strings = vec![
+            "shngcmfkqjtvhnbgfcvbm",
+            "qjflpsvacyhsgxykbvarbvmxapufmdt",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "xfjhaqjkcjiepmcbhopgpxwwth",
+            "a",
+            "a",
+        ];
         let arg = strings.iter().map(|s| (*s).to_owned()).collect();
+        //        let cdb = make_temp_cdb_single_vals(&arg);
+
+        let cdb = CDB::load("/tmp/teh.cdb").unwrap();
+
+        cdb.dump_debug(&mut ::std::io::stderr()).unwrap();
+
         for QueryResult(q, r) in make_and_then_read(&arg) {
             assert_eq!(Some(q), r);
         }

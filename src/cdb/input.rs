@@ -1,24 +1,24 @@
+use super::KV;
+use super::errors::WriterError;
 use bytes::*;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::str;
-use super::errors::WriterError;
-use super::KV;
 
 struct KVSizes(usize, usize);
 
-const PLUS: u8  = 0x2b; // ASCII '+'
+const PLUS: u8 = 0x2b; // ASCII '+'
 const COMMA: u8 = 0x2c; // ASCII ','
 const COLON: u8 = 0x3a; // ASCII ':'
-const NL: u8    = 0x0a; // ASCII '\n'
+const NL: u8 = 0x0a; // ASCII '\n'
 
 fn parse_digits(buf: &[u8]) -> Result<usize, WriterError> {
     str::from_utf8(&buf)
         .map_err(|err| WriterError::UTF8Error(err))
-        .and_then(|str|
+        .and_then(|str| {
             str.parse::<usize>()
                 .map_err(|err| WriterError::ParseError(err))
-        )
+        })
 }
 
 const ARROW_BYTES: &[u8; 2] = b"->";
@@ -33,10 +33,8 @@ fn read_begin<T: Read>(input: &mut BufReader<T>) -> Result<Option<()>, WriterErr
 
     match buf[0] {
         PLUS => Ok(Some(())),
-        NL   => Ok(None),
-        wat  => {
-            panic!("encountered unexpected char: {:?}", wat as char)
-        },
+        NL => Ok(None),
+        wat => panic!("encountered unexpected char: {:?}", wat as char),
     }
 }
 
@@ -84,21 +82,23 @@ fn read_kv<T: Read>(input: &mut BufReader<T>, kvs: &KVSizes) -> Result<KV, Write
     assert_eq!(newline.len(), 1);
     assert_eq!(newline[0], NL);
 
-    Ok(KV { k: Bytes::from(kbytes), v: Bytes::from(vbytes) })
+    Ok(KV {
+        k: Bytes::from(kbytes),
+        v: Bytes::from(vbytes),
+    })
 }
 
 fn read_one_record<T: Read>(input: &mut BufReader<T>) -> Result<Option<KV>, WriterError> {
     match read_begin(input)? {
         None => Ok(None),
-        Some(_) =>
-            read_sizes(input)
-                .and_then(|sizes| read_kv(input, &sizes))
-                .map(|kv| Some(kv))
+        Some(_) => read_sizes(input)
+            .and_then(|sizes| read_kv(input, &sizes))
+            .map(|kv| Some(kv)),
     }
 }
 
 pub struct IterParser<T: Read> {
-    buf: BufReader<T>
+    buf: BufReader<T>,
 }
 
 impl<T: Read> Iterator for IterParser<T> {
@@ -107,15 +107,17 @@ impl<T: Read> Iterator for IterParser<T> {
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         match read_one_record(&mut self.buf) {
             Ok(Some(kv)) => Some(Ok(kv)),
-            Ok(None)     => None,
-            Err(err)     => Some(Err(err)),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
         }
     }
 }
 
 // expects input in CDB format '+ks,vs:k->v\n'
 pub fn parse<T: 'static + Read>(rdr: T) -> IterParser<T> {
-    IterParser{buf: BufReader::new(rdr)}
+    IterParser {
+        buf: BufReader::new(rdr),
+    }
 }
 
 #[cfg(test)]
@@ -128,15 +130,14 @@ mod tests {
         let recs: Vec<Result<KV, WriterError>> = parse(reader).collect();
 
         assert_eq!(recs.len(), 1);
-        match recs[0]{
-            Ok(KV{ref k, ref v}) => {
+        match recs[0] {
+            Ok(KV { ref k, ref v }) => {
                 assert_eq!(k, "cat");
                 assert_eq!(v, "ball");
-            },
+            }
             Err(ref x) => panic!("should not have errored: {:?}", x),
         };
     }
-
 
     #[test]
     fn parser_read_one_record() {
@@ -144,10 +145,10 @@ mod tests {
         let one = read_one_record(&mut BufReader::new(reader));
 
         match one {
-            Ok(Some(KV{ref k, ref v})) => {
+            Ok(Some(KV { ref k, ref v })) => {
                 assert_eq!(k, "cat");
                 assert_eq!(v, "ball");
-            },
+            }
             Ok(None) => panic!("got None expected Some"),
             Err(ref x) => panic!("should not have errored: {:?}", x),
         }

@@ -1,18 +1,20 @@
 use bytes::Bytes;
+use env_logger;
 use rand::{thread_rng, Rng};
 use std::io;
-use std::time::{Instant,Duration};
+use std::time::{Duration, Instant};
 
 pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
+    env_logger::try_init().unwrap();
+
     let mut rng = thread_rng();
 
     let keys = {
-        let mut ks: Vec<Bytes> =
-            db.kvs_iter()
-                .filter(|_| rng.gen::<f32>() < 0.3)
-                .take(100_000)
-                .map(|kv| kv.k)
-                .collect();
+        let mut ks: Vec<Bytes> = db.kvs_iter()
+            .filter(|_| rng.gen::<f32>() < 0.3)
+            .take(100_000)
+            .map(|kv| kv.k)
+            .collect();
 
         ks.shrink_to_fit();
         ks
@@ -27,15 +29,25 @@ pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
     for _ in 0..iters {
         match rng.choose(&keys) {
             Some(k) => {
-                if db.get(k).is_some() { hit += 1 } else { miss += 1 }
+                if db.get(k).is_some() {
+                    hit += 1
+                } else {
+                    miss += 1
+                }
             }
-            None => continue
+            None => continue,
         };
     }
 
     let hitrate = (hit as f64 / iters as f64) * 100.0;
 
-    debug!("hit: {}, miss: {}, ratio: {ratio:.*}%", hit, miss, 3, ratio=hitrate);
+    debug!(
+        "hit: {}, miss: {}, ratio: {ratio:.*}%",
+        hit,
+        miss,
+        3,
+        ratio = hitrate
+    );
 
     Ok(start.elapsed())
 }
