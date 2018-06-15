@@ -5,9 +5,9 @@ use std::io;
 use std::io::prelude::*;
 use std::sync::Arc;
 
+pub mod randoread;
 pub mod errors;
 pub mod input;
-pub mod randoread;
 pub mod writer;
 
 pub const STARTING_HASH: u32 = 5381;
@@ -16,86 +16,77 @@ const MAIN_TABLE_SIZE_BYTES: usize = 2048;
 const END_TABLE_ENTRY_SIZE: usize = 8;
 const DATA_HEADER_SIZE: usize = 8;
 
-pub fn djb_hash(bytes: &[u8]) -> usize {
-    let mut h = STARTING_HASH;
+// idea from https://raw.githubusercontent.com/jothan/cordoba/master/src/lib.rs
+#[derive(Copy, Clone, Eq, PartialEq)]
+struct CDBHash(u32);
 
-    for b in bytes {
-        // wrapping here is explicitly for allowing overflow semantics:
-        //
-        //   Operations like + on u32 values is intended to never overflow,
-        //   and in some debug configurations overflow is detected and results in a panic.
-        //   While most arithmetic falls into this category, some code explicitly expects
-        //   and relies upon modular arithmetic (e.g., hashing)
-        //
-        h = h.wrapping_shl(5).wrapping_add(h) ^ (*b as u32)
+impl CDBHash {
+    fn new(d: &[u8]) -> Self {
+        let h = d.iter().fold(STARTING_HASH, |h, &c| {
+            (h << 5).wrapping_add(h) ^ u32::from(c)
+        });
+        CDBHash(h)
     }
-    h as usize
-}
 
-#[derive(Copy, Clone)]
-struct HashPair {
-    hash: u32,
-    ptr: usize,
-    pos: usize, // the position of this hash pair in the table (mostly for debugging)
-}
+    fn table(&self) -> usize {
+        self.0 as usize % MAIN_TABLE_SIZE
+    }
 
-impl fmt::Debug for HashPair {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "HashPair {{ pos: {:>#010x}, hash: {:>#010x}, ptr: {:>#010x} }}",
-            self.pos, self.hash, self.ptr
-        )
+    fn slot(&self, num_ents: usize) -> usize {
+        (self.0 as usize >> 8) % num_ents
     }
 }
 
+impl fmt::Debug for CDBHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "CDBHash(0x{:08x})", self.0)
+    }
+}
+
+impl<'a> From<&'a CDBHash> for u32 {
+    fn from(h: &'a CDBHash) -> Self {
+        h.0
+    }
+}
+
 #[derive(Copy, Clone)]
-struct TableRec {
+struct Bucket {
     ptr: usize,
     num_ents: usize,
 }
 
-impl fmt::Debug for TableRec {
+impl fmt::Debug for Bucket {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TableRec {{ ptr: {:>#010x}, num_ents: {:>#010x} }}", self.ptr, self.num_ents)
+        write!(
+            f,
+            "TableRec {{ ptr: {:>#010x}, num_ents: {:>#010x} }}",
+            self.ptr, self.num_ents
+        )
     }
 }
 
-struct TableRecIter {
-    // index of the end table entry, used to compute the offset
-    idx: usize,
-    rec: TableRec,
-}
+impl Bucket {
+    fn iter<'a>(&'a self, start: usize) -> Box<Iterator<Item=IndexEntryPos> + 'a> {
+        Box::new(
+            (0..self.num_ents).map(move |i| self.entry_n_pos((i + start) % self.num_ents) )
+        )
+    }
 
-impl TableRecIter {
-    fn new(rec: TableRec) -> Self {
-        TableRecIter { idx: 0, rec }
+    // returns the offset into the db of entry n of this bucket.
+    // panics if n >= num_ents
+    fn entry_n_pos<'a>(&'a self, n: usize) -> IndexEntryPos {
+        assert!(n < self.num_ents);
+        IndexEntryPos(self.ptr + (n * END_TABLE_ENTRY_SIZE))
     }
 }
 
-impl Iterator for TableRecIter {
-    type Item = usize;
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct IndexEntryPos(usize);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let cur = self.idx;
-        if self.idx < self.rec.num_ents {
-            self.idx += 1;
-            Some(self.rec.ptr + (cur * END_TABLE_ENTRY_SIZE))
-        } else {
-            None
-        }
+impl From<IndexEntryPos> for usize {
+    fn from(n: IndexEntryPos) -> Self {
+        n.0
     }
-}
-
-impl TableRec {
-    fn iter(&self) -> TableRecIter {
-        TableRecIter::new(self.clone())
-    }
-}
-
-struct KVLen {
-    k: usize,
-    v: usize,
 }
 
 #[derive(Debug)]
@@ -105,6 +96,7 @@ pub struct KV {
 }
 
 impl KV {
+    #[allow(dead_code)]
     fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
         write!(w, "+{},{}:", self.k.len(), self.v.len())?;
         w.write(self.k.as_ref())?;
@@ -114,16 +106,21 @@ impl KV {
     }
 }
 
-type MainTable = [TableRec; MAIN_TABLE_SIZE];
+type BucketsTable = [Bucket; MAIN_TABLE_SIZE];
 
-#[derive(Clone)]
 pub struct CDB {
-    main_table: Arc<MainTable>,
+    main_table: BucketsTable,
     data: Bytes,
 }
 
+struct IndexEntry {
+    hash: CDBHash, // the hash of the stored key
+    ptr: usize,    // pointer to the absolute position of the data in the db
+    _pos: usize,   // the position of this hash pair in the db (mostly for debugging)
+}
+
 impl CDB {
-    fn load_main_table(b: Bytes) -> MainTable {
+    fn load_main_table(b: Bytes) -> BucketsTable {
         let mut buf = b.into_buf();
 
         if buf.remaining() != MAIN_TABLE_SIZE_BYTES {
@@ -134,7 +131,7 @@ impl CDB {
             );
         }
 
-        let mut table = [TableRec {
+        let mut table = [Bucket {
             ptr: 0,
             num_ents: 0,
         }; MAIN_TABLE_SIZE];
@@ -158,169 +155,100 @@ impl CDB {
         let x = bytes.slice_to(MAIN_TABLE_SIZE_BYTES).clone();
 
         Ok(CDB {
-            main_table: Arc::new(CDB::load_main_table(x)),
+            main_table: CDB::load_main_table(x),
             data: bytes,
         })
     }
 
-    fn hash_pair_at(&self, pos: usize) -> Option<HashPair> {
+    // returns the index entry at absolute position 'pos' in the db
+    fn index_entry_at(&self, pos: IndexEntryPos) -> IndexEntry {
+        let pos: usize = pos.into();
+
         if pos < MAIN_TABLE_SIZE_BYTES {
-            panic!("position {} was in the main table!", pos)
+            panic!("position {:?} was in the main table!", pos)
         }
 
         let mut b = self.data.slice(pos, pos + 8).into_buf();
-        let hash = b.get_u32_le();
+        let hash = CDBHash(b.get_u32_le());
         let ptr = b.get_u32_le() as usize;
 
-        if ptr == 0 {
-            None
-        } else {
-            Some(HashPair { pos, hash, ptr })
-        }
-    }
-
-    fn get_kv_len(&self, posn: usize) -> KVLen {
-        let mut b = self.data.slice(posn, posn + DATA_HEADER_SIZE).into_buf();
-        let k = b.get_u32_le() as usize;
-        let v = b.get_u32_le() as usize;
-        KVLen { k, v }
-    }
-
-    fn get_kv(&self, hp: &HashPair) -> Option<KV> {
-        let kvl = self.get_kv_len(hp.ptr);
-
-        let kstart = hp.ptr + DATA_HEADER_SIZE;
-        let vstart = kstart + kvl.k;
-
-        let k = self.data.slice(kstart, kstart + kvl.k);
-        let v = self.data.slice(vstart, vstart + kvl.v);
-
-        Some(KV { k, v })
-    }
-
-    // read the end table at ptr, entry ent, looking for needle,
-    // returns Some(KV) if found
-    //
-    fn get_kv_ent(&self, ptr: usize, ent: usize, needle: u32) -> Option<KV> {
-        match self.hash_pair_at(ptr + (ent * END_TABLE_ENTRY_SIZE)) {
-            Some(ref hp) if hp.hash == needle => self.get_kv(hp),
-            _ => None,
-        }
-    }
-
-    pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        let hash = djb_hash(key);
-        let rec = self.main_table[hash % 256];
-
-        trace!(
-            "get: key {}, hash: {:?}, table posn: {:?}, main rec: {:?}",
-            ::std::str::from_utf8(key).unwrap(),
+        IndexEntry {
             hash,
-            hash % 256,
-            rec
-        );
+            ptr,
+            _pos: pos,
+        }
+    }
 
-        if rec.num_ents == 0 {
-            trace!("extents empty, returning none");
+    fn get_kv(&self, ie: &IndexEntry) -> KV {
+        let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE).into_buf();
+
+        let ksize = b.get_u32_le() as usize;
+        let vsize = b.get_u32_le() as usize;
+
+        let kstart = ie.ptr + DATA_HEADER_SIZE;
+        let vstart = kstart + ksize;
+
+        let k = self.data.slice(kstart, kstart + ksize);
+        let v = self.data.slice(vstart, vstart + vsize);
+
+        KV { k, v }
+    }
+
+    pub fn get<'a, S>(&self, key: S) -> Option<Bytes>
+        where S: Into<&'a [u8]>
+    {
+        let key = key.into();
+        let hash = CDBHash::new(key);
+        let bucket = self.main_table[hash.table()];
+
+        if bucket.num_ents == 0 {
+            trace!("bucket empty, returning none");
             return None;
         }
 
-        let start_ent = (hash >> 8) % rec.num_ents;
-
-        let rng_a = start_ent..rec.num_ents;
-        let rng_b = 0..start_ent;
-
-        trace!(
-            "searching range: {} -> {}, {} -> {}",
-            rng_a.start,
-            rng_a.end,
-            rng_b.start,
-            rng_b.end
-        );
-
-        for ent in rng_a.chain(rng_b) {
-            trace!("get posn: {}", ent);
-            if let Some(ref kv) = self.get_kv_ent(rec.ptr, ent, hash as u32) {
-                trace!("got kv: {:?}", kv);
-                if kv.k == key {
+        for index_entry_pos in bucket.iter(hash.slot(bucket.num_ents)) {
+            let idx_ent = self.index_entry_at(index_entry_pos);
+            
+            if idx_ent.ptr == 0 {
+                return None;
+            } else if idx_ent.hash == hash {
+                let kv = self.get_kv(&idx_ent);
+                if &kv.k[..] == key {
                     return Some(kv.v.clone());
                 } else {
                     continue;
                 }
-            } else {
-                break;
             }
         }
 
         None
     }
 
-    // Returns an iterator of every offset to every known entry in the secondary table
-    fn end_table_offset_iter<'a>(&'a self) -> Box<Iterator<Item = usize> + 'a> {
-        let iter_of_iters = self.main_table.iter().map(|t_rec| t_rec.iter());
-
-        // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
-        Box::new(::itertools::Itertools::flatten(iter_of_iters))
-    }
-
-    fn hash_pairs<'a>(&'a self) -> Box<Iterator<Item = HashPair> + 'a> {
+    #[allow(dead_code)]
+    pub fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
         Box::new(
-            self.end_table_offset_iter()
-                .filter_map(move |offset| self.hash_pair_at(offset)),
+            // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
+            ::itertools::Itertools::flatten(
+                self.main_table.iter()
+                    .map(move |bucket| bucket.iter(0))
+            )
+                .map(move |pos| self.get_kv(&self.index_entry_at(pos)))
         )
-    }
-
-    fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item = KV> + 'a> {
-        Box::new(self.hash_pairs().filter_map(move |hp| self.get_kv(&hp)))
-    }
-
-    pub fn keys(&self) -> Vec<Bytes> {
-        self.kvs_iter().map(|kv| kv.k).collect()
-    }
-
-    pub fn dump(&self, w: &mut impl io::Write) -> io::Result<()> {
-        for kv in self.kvs_iter() {
-            match kv.dump(w) {
-                Err(err) => return Err(err),
-                _ => continue,
-            }
-        }
-
-        write!(w, "\n")?; // need a trailing newline
-        Ok(())
-    }
-
-    pub fn dump_debug(&self, w: &mut impl io::Write) -> io::Result<()> {
-        write!(w, "--< main table >--\n")?;
-
-        for (i, t_rec) in self.main_table.iter().enumerate() {
-            if t_rec.num_ents == 0 {
-                continue;
-            }
-            writeln!(w, "{:>#08x} {:?}", i, t_rec)?;
-        }
-
-        write!(w, "\n--< extents >--\n")?;
-
-        for hash_pair in self.hash_pairs() {
-            writeln!(w, "{:?}", hash_pair)?;
-        }
-
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use proptest::collection::vec;
-    use proptest::prelude::*;
-    use proptest::string;
+    use env_logger;
     use std::collections::hash_set;
     use std::fs::remove_file;
     use std::path::PathBuf;
+    use super::*;
     use tempfile::NamedTempFile;
     use tinycdb::Cdb as TCDB;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::string;
 
     fn arb_string_slice<'a>() -> BoxedStrategy<Vec<String>> {
         let st = string::string_regex("[a-z]+").unwrap();
@@ -329,6 +257,7 @@ mod tests {
 
     struct QueryResult(String, Option<String>);
 
+    #[allow(dead_code)]
     fn create_temp_cdb(kvs: &[(&str, &str)]) -> io::Result<CDB> {
         let path: PathBuf;
 
@@ -358,27 +287,6 @@ mod tests {
         Ok(cdb)
     }
 
-    type QueryResultIter<'a> = Box<Iterator<Item = QueryResult> + 'a>;
-
-    fn read_keys<'a>(cdb: CDB, xs: &'a Vec<String>) -> QueryResultIter<'a> {
-        Box::new(xs.iter().map(move |x| {
-            let res = cdb.get(x.as_ref());
-            QueryResult(
-                x.clone(),
-                res.map(|v| String::from_utf8(v.to_vec()).unwrap()),
-            )
-        }))
-    }
-
-    fn make_temp_cdb_single_vals(xs: &Vec<String>) -> CDB {
-        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
-        create_temp_cdb(&kvs[..]).unwrap()
-    }
-
-    fn make_and_then_read<'a>(xs: &'a Vec<String>) -> QueryResultIter<'a> {
-        read_keys(make_temp_cdb_single_vals(xs), xs)
-    }
-
     proptest! {
         #[test]
         fn qc_key_and_value_retrieval(ref xs in arb_string_slice()) {
@@ -391,24 +299,28 @@ mod tests {
         }
     }
 
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    use std::path::Path;
+    type QueryResultIter<'a> = Box<Iterator<Item = QueryResult> + 'a>;
 
-    #[test]
-    fn test_with_dictionary() {
-        let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
-        let bufr = BufReader::new(&f);
-
-        let mut acc: Vec<String> = Vec::new();
-
-        for line in bufr.lines() {
-            let word = line.unwrap();
-            acc.push(word.to_owned());
-        }
+    fn read_keys<'a>(cdb: CDB, xs: &'a Vec<String>) -> QueryResultIter<'a> {
+        Box::new(xs.iter().map(move |x| {
+            let res = cdb.get(x.as_ref());
+            QueryResult(
+                x.clone(),
+                res.map(|v| String::from_utf8(v.to_vec()).unwrap()),
+            )
+        }))
     }
 
-    use env_logger;
+    #[allow(dead_code)]
+    fn make_temp_cdb_single_vals(xs: &Vec<String>) -> CDB {
+        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
+        create_temp_cdb(&kvs[..]).unwrap()
+    }
+
+    #[allow(dead_code)]
+    fn make_and_then_read<'a>(xs: &'a Vec<String>) -> QueryResultIter<'a> {
+        read_keys(make_temp_cdb_single_vals(xs), xs)
+    }
 
     #[test]
     fn read_small_list() {
@@ -428,13 +340,35 @@ mod tests {
             "a",
         ];
         let arg = strings.iter().map(|s| (*s).to_owned()).collect();
-        //        let cdb = make_temp_cdb_single_vals(&arg);
 
-        let cdb = CDB::load("/tmp/teh.cdb").unwrap();
+        let cdb = make_temp_cdb_single_vals(&arg);
 
-        cdb.dump_debug(&mut ::std::io::stderr()).unwrap();
+        for QueryResult(q, r) in read_keys(cdb, &arg) {
+            assert_eq!(Some(q), r);
+        }
+    }
 
-        for QueryResult(q, r) in make_and_then_read(&arg) {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
+
+    #[test]
+    fn test_with_dictionary() {
+        let mut args: Vec<String> = Vec::new();
+
+        {
+            let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
+            let bufr = BufReader::new(&f);
+
+            for line in bufr.lines() {
+                let word = line.unwrap();
+                args.push(word.to_owned());
+            }
+        }
+
+        let cdb = make_temp_cdb_single_vals(&args);
+
+        for QueryResult(q, r) in read_keys(cdb, &args) {
             assert_eq!(Some(q), r);
         }
     }

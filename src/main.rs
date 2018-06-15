@@ -10,15 +10,6 @@ use std::time::Duration;
 
 use cdb_rs::cdb;
 
-#[allow(dead_code)]
-fn dump(filename: &str) -> io::Result<()> {
-    let db = cdb::CDB::load(filename)?;
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-
-    db.dump(&mut handle)
-}
-
 fn dur2sec(d: &Duration) -> f64  {
     d.as_secs() as f64 + (d.subsec_nanos() as f64 * 1e-9)
 }
@@ -37,7 +28,11 @@ fn randoread(filename: &str, iters: u64) -> io::Result<()> {
 }
 
 fn main() {
-    env_logger::init();
+    match env_logger::try_init() {
+        Ok(_) => "",    // yay great
+        Err(_) => "",   // wtfever
+    };
+
     let args: Vec<String> = env::args().collect();
 
     let progname =
@@ -54,7 +49,7 @@ fn main() {
     let filename = &args[1];
 
     std::process::exit(
-        match randoread(filename, 100_000_000) {
+        match randoread(filename, 100_000) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);

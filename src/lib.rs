@@ -12,4 +12,3 @@ extern crate tempfile;
 extern crate tinycdb;
 
 pub mod cdb;
-pub mod cdb2;

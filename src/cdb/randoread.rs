@@ -5,8 +5,6 @@ use std::io;
 use std::time::{Duration, Instant};
 
 pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
-    env_logger::try_init().unwrap();
-
     let mut rng = thread_rng();
 
     let keys = {
@@ -29,10 +27,13 @@ pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
     for _ in 0..iters {
         match rng.choose(&keys) {
             Some(k) => {
-                if db.get(k).is_some() {
+                if db.get((*k).as_ref()).is_some() {
                     hit += 1
                 } else {
                     miss += 1
+                }
+                if (hit + miss) % 1000 == 0 {
+                    debug!("did {}", hit + miss);
                 }
             }
             None => continue,
