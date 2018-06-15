@@ -252,55 +252,72 @@ impl CDB {
 mod tests {
     use tinycdb::Cdb as TCDB;
     use tempfile::NamedTempFile;
-    use std::borrow::Borrow;
     use std::fs::remove_file;
     use std::collections::hash_set;
+    use std::path::PathBuf;
     use proptest::prelude::*;
     use proptest::string;
     use proptest::collection::vec;
     use super::*;
 
-    fn arb_string_vec() -> BoxedStrategy<Vec<String>> {
+    fn arb_string_slice<'a>() -> BoxedStrategy<Vec<String>> {
         let st = string::string_regex("[a-z]+").unwrap();
         vec(st, 10..1000).boxed()
     }
 
     struct QueryResult(String, Option<String>);
 
-    fn make_and_then_read(xs: &Vec<String>) -> Vec<QueryResult> {
-        let ntf = NamedTempFile::new().unwrap();
-        remove_file(ntf.path()).unwrap();
+    fn create_temp_cdb(kvs: &[(&str, &str)]) -> io::Result<CDB> {
+        let path: PathBuf;
 
+        {
+            let ntf = NamedTempFile::new()?;
+            remove_file(ntf.path())?;
+            path = ntf.path().to_owned();
+        }
+        
         let mut dupcheck = hash_set::HashSet::new();
 
-        TCDB::new(ntf.path(), |c| {
-            let ys = xs.to_owned();
-            for x in ys {
-                let xx = x.clone();
-                if !dupcheck.contains(&x) {
-                    dupcheck.insert(x);
-                    c.add(xx.as_ref(), xx.as_ref()).unwrap();
+        TCDB::new(path.as_ref(), |c| {
+            let ys = kvs.to_owned();
+            for (k, v) in ys {
+                let kk = k.clone();
+                let vv = v.clone();
+
+                if !dupcheck.contains(&k) {
+                    dupcheck.insert(k);
+                    c.add(kk.as_ref(), vv.as_ref()).unwrap();
                 }
             }
         }).unwrap();
 
-        let cdb = CDB::load(ntf.path().to_str().unwrap()).unwrap();
+        let cdb = CDB::load(path.to_str().unwrap())?;
+
+        Ok(cdb)
+    }
+
+    fn make_and_then_read(xs: &Vec<String>) -> Vec<QueryResult> {
+        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
+        let cdb = create_temp_cdb(&kvs[..]).unwrap();
+
 
         xs.iter()
-            .map(|x|
+            .map(|x| {
+                let res = cdb.get(x.as_ref());
                 QueryResult(
                     x.clone(),
-                    cdb.get(x.as_ref()).map(|v| String::from_utf8(v.to_vec()).unwrap())
+                    res.map(|v| String::from_utf8(v.to_vec()).unwrap())
                 )
-            )
+
+            })
             .collect()
     }
 
 
     proptest! {
         #[test]
-        fn qc_key_and_value_retrieval(ref xs in arb_string_vec()) {
-            for QueryResult(q, r) in make_and_then_read(&xs) {
+        fn qc_key_and_value_retrieval(ref xs in arb_string_slice()) {
+            for QueryResult(q, r) in make_and_then_read(xs) {
                 prop_assert_eq!(
                     Some(q),
                     r
