@@ -10,7 +10,8 @@ memmap = "0.6.2"
 itertools = "0.6"
 log = "0.4"
 env_logger = "0.5.10"
-tempdir = "0.3"
+tempfile = "3"
+proptest = "0.7.1"
 
 [dependencies.tinycdb]
 git = "https://github.com/andrew-d/tinycdb-rs"
