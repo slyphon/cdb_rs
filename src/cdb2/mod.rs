@@ -103,7 +103,7 @@ impl Bucket {
         IndexEntryIter::new(cdb, self.clone(), start)
     }
 
-    // returns the offset into the db of entry n of this bucket
+    // returns the offset into the db of entry n of this bucket.
     // panics if n >= num_ents
     fn entry_n_pos<'a>(&'a self, n: usize) -> IndexEntryPos {
         assert!(n < self.num_ents);
@@ -216,6 +216,7 @@ impl CDB {
         let mut b = self.data
             .slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE)
             .into_buf();
+        
         let ksize = b.get_u32_le() as usize;
         let vsize = b.get_u32_le() as usize;
 
@@ -256,6 +257,17 @@ impl CDB {
         None
     }
 
+    #[allow(dead_code)]
+    pub fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
+        Box::new(
+            // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
+            ::itertools::Itertools::flatten(
+                self.main_table.iter()
+                    .map(move |bucket| bucket.iter(self.clone(), 0))
+            )
+                .map(move |ie| self.get_kv(&ie))
+        )
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +279,14 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
     use tinycdb::Cdb as TCDB;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::string;
+
+    fn arb_string_slice<'a>() -> BoxedStrategy<Vec<String>> {
+        let st = string::string_regex("[a-z]+").unwrap();
+        vec(st, 10..1000).boxed()
+    }
 
     struct QueryResult(String, Option<String>);
 
@@ -298,6 +318,18 @@ mod tests {
         let cdb = CDB::load(path.to_str().unwrap())?;
 
         Ok(cdb)
+    }
+
+    proptest! {
+        #[test]
+        fn qc_key_and_value_retrieval(ref xs in arb_string_slice()) {
+            for QueryResult(q, r) in make_and_then_read(xs){
+                prop_assert_eq!(
+                    Some(q),
+                    r
+                );
+            }
+        }
     }
 
     type QueryResultIter<'a> = Box<Iterator<Item = QueryResult> + 'a>;
@@ -342,17 +374,35 @@ mod tests {
         ];
         let arg = strings.iter().map(|s| (*s).to_owned()).collect();
 
-        let cdb = CDB::load("/tmp/teh.cdb").unwrap();
-
-        for QueryResult(q, r) in read_keys(cdb, &arg) {
-            assert_eq!(Some(q), r);
-        }
-
         let cdb = make_temp_cdb_single_vals(&arg);
 
         for QueryResult(q, r) in read_keys(cdb, &arg) {
             assert_eq!(Some(q), r);
         }
+    }
 
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
+
+    #[test]
+    fn test_with_dictionary() {
+        let mut args: Vec<String> = Vec::new();
+
+        {
+            let f = File::open(Path::new("/usr/share/dict/words")).unwrap();
+            let bufr = BufReader::new(&f);
+
+            for line in bufr.lines() {
+                let word = line.unwrap();
+                args.push(word.to_owned());
+            }
+        }
+
+        let cdb = make_temp_cdb_single_vals(&args);
+
+        for QueryResult(q, r) in read_keys(cdb, &args) {
+            assert_eq!(Some(q), r);
+        }
     }
 }
