@@ -22,7 +22,7 @@ fn randoread(filename: &str, iters: u64) -> io::Result<()> {
     let rate = iters as f64 / d2f;
 
     info!(
-        "{} iters in {} sec, {} op/sec", iters, d2f, rate
+        "{} iters in {} sec, {:.3} op/sec", iters, d2f, rate
     );
     Ok(())
 }
@@ -49,7 +49,7 @@ fn main() {
     let filename = &args[1];
 
     std::process::exit(
-        match randoread(filename, 100_000) {
+        match randoread(filename, 100_000_000) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);

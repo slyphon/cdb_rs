@@ -1,10 +1,9 @@
 use bytes::{Buf, Bytes, IntoBuf};
+use std::cmp;
 use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::sync::Arc;
-use std::collections::hash_map;
 
 pub mod randoread;
 pub mod errors;
@@ -22,10 +21,19 @@ const DATA_HEADER_SIZE: usize = 8;
 struct CDBHash(u32);
 
 impl CDBHash {
-    fn new(d: &[u8]) -> Self {
-        let h = d.iter().fold(STARTING_HASH, |h, &c| {
-            (h << 5).wrapping_add(h) ^ u32::from(c)
-        });
+    fn new(bytes: &[u8]) -> Self {
+        let mut h = STARTING_HASH;
+
+        for b in bytes {
+            // wrapping here is explicitly for allowing overflow semantics:
+            //
+            //   Operations like + on u32 values is intended to never overflow,
+            //   and in some debug configurations overflow is detected and results in a panic.
+            //   While most arithmetic falls into this category, some code explicitly expects
+            //   and relies upon modular arithmetic (e.g., hashing)
+            //
+            h = h.wrapping_shl(5).wrapping_add(h) ^ (*b as u32)
+        }
         CDBHash(h)
     }
 
@@ -41,6 +49,12 @@ impl CDBHash {
 impl fmt::Debug for CDBHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CDBHash(0x{:08x})", self.0)
+    }
+}
+
+impl<'a> From<&'a CDBHash> for usize {
+    fn from(h: &'a CDBHash) -> Self {
+        h.0 as usize
     }
 }
 
@@ -67,12 +81,6 @@ impl fmt::Debug for Bucket {
 }
 
 impl Bucket {
-    fn iter<'a>(&'a self, start: usize) -> Box<Iterator<Item=IndexEntryPos> + 'a> {
-        Box::new(
-            (0..self.num_ents).map(move |i| self.entry_n_pos((i + start) % self.num_ents) )
-        )
-    }
-
     // returns the offset into the db of entry n of this bucket.
     // panics if n >= num_ents
     fn entry_n_pos<'a>(&'a self, n: usize) -> IndexEntryPos {
@@ -90,7 +98,7 @@ impl From<IndexEntryPos> for usize {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct KV {
     k: Bytes,
     v: Bytes,
@@ -107,52 +115,84 @@ impl KV {
     }
 }
 
-type BucketsTable = Vec<Bucket>;
-
 pub struct CDB {
-    main_table: BucketsTable,
+    main_table: Bytes,
     data: Bytes
+}
+
+impl Clone for CDB {
+    fn clone(&self) -> Self {
+        CDB {
+            main_table: self.main_table.clone(),
+            data: self.data.clone(),
+        }
+    }
 }
 
 struct IndexEntry {
     hash: CDBHash, // the hash of the stored key
     ptr: usize,    // pointer to the absolute position of the data in the db
-    _pos: usize,   // the position of this hash pair in the db (mostly for debugging)
+}
+
+pub struct KVIter {
+    cdb: Box<CDB>,
+    bkt_idx: usize,
+    entry_n: usize,
+    bkt: Bucket,
+}
+
+impl KVIter {
+    fn new(cdb: &CDB) -> Self {
+        KVIter{cdb: Box::new(cdb.clone()), bkt_idx: 0, entry_n: 0, bkt: cdb.bucket_at(0)}
+    }
+}
+
+impl Iterator for KVIter {
+    type Item = KV;
+
+    fn next(&mut self) -> Option<KV> {
+        loop {
+            if self.bkt_idx >= MAIN_TABLE_SIZE {
+                return None
+            }
+
+            if self.entry_n >= self.bkt.num_ents {
+                self.bkt_idx += 1;
+                self.entry_n = 0;
+                if self.bkt_idx < MAIN_TABLE_SIZE {
+                    self.bkt = self.cdb.bucket_at(self.bkt_idx);
+                }
+                continue
+            }
+
+            let idx_ent = self.cdb.index_entry_at(self.bkt.entry_n_pos(self.entry_n));
+            self.entry_n += 1;
+            
+            if idx_ent.ptr == 0 {
+                continue
+            } else {
+                return Some(self.cdb.get_kv(idx_ent))
+            }
+        }
+    }
 }
 
 impl CDB {
-    #[allow(dead_code)]
-    pub fn kvs_iter<'a>(&'a self) -> Box<Iterator<Item=KV> + 'a> {
-        Box::new(
-            // fully qualify this call because of https://github.com/rust-lang/rust/issues/48919
-            ::itertools::Itertools::flatten(
-                self.main_table.iter()
-                    .map(move |bucket| bucket.iter(0))
-            )
-                .map(move |pos| self.get_kv(&self.index_entry_at(pos)))
-        )
+    pub fn kvs_iter(&self) -> KVIter {
+        KVIter::new(&self)
     }
+    
 
-    fn load_main_table(b: Bytes) -> BucketsTable {
-        let mut buf = b.into_buf();
+    fn bucket_at(&self, idx: usize) -> Bucket {
+        assert!(idx < MAIN_TABLE_SIZE);
 
-        if buf.remaining() != MAIN_TABLE_SIZE_BYTES {
-            panic!(
-                "buf was not the right size, expected {} got {}",
-                MAIN_TABLE_SIZE_BYTES,
-                buf.remaining(),
-            );
-        }
+        let off = 8 * idx;
 
-        let mut table: Vec<Bucket> = Vec::with_capacity(MAIN_TABLE_SIZE);
+        let mut b = self.main_table.slice(off, off + 8).into_buf();
+        let ptr = b.get_u32_le() as usize;
+        let num_ents = b.get_u32_le() as usize;
 
-        for _ in 0..MAIN_TABLE_SIZE {
-            table.push(Bucket{ptr: buf.get_u32_le() as usize, num_ents: buf.get_u32_le() as usize});
-        }
-
-        debug!("table loaded");
-
-        table
+        Bucket{ptr, num_ents}
     }
 
     pub fn load(path: &str) -> io::Result<CDB> {
@@ -161,11 +201,10 @@ impl CDB {
         f.read_to_end(&mut buffer)?;
 
         let bytes = Bytes::from(buffer);
-        let x = bytes.slice_to(MAIN_TABLE_SIZE_BYTES).clone();
 
         Ok(CDB {
-            main_table: CDB::load_main_table(x),
-            data: bytes,
+            data: bytes.clone(),
+            main_table: bytes.slice_to(MAIN_TABLE_SIZE_BYTES),
         })
     }
 
@@ -181,14 +220,10 @@ impl CDB {
         let hash = CDBHash(b.get_u32_le());
         let ptr = b.get_u32_le() as usize;
 
-        IndexEntry {
-            hash,
-            ptr,
-            _pos: pos,
-        }
+        IndexEntry { hash, ptr }
     }
 
-    fn get_kv(&self, ie: &IndexEntry) -> KV {
+    fn get_kv(&self, ie: IndexEntry) -> KV {
         let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE).into_buf();
 
         let ksize = b.get_u32_le() as usize;
@@ -206,20 +241,24 @@ impl CDB {
     pub fn get<'a>(&self, key: &[u8]) -> Option<Bytes> {
         let key = key.into();
         let hash = CDBHash::new(key);
-        let bucket = self.main_table[hash.table()];
+        let bucket = self.bucket_at(hash.table());
 
         if bucket.num_ents == 0 {
             trace!("bucket empty, returning none");
             return None;
         }
 
-        for index_entry_pos in bucket.iter(hash.slot(bucket.num_ents)) {
+        let slot = hash.slot(bucket.num_ents);
+
+        for x in 0..bucket.num_ents {
+            let index_entry_pos = bucket.entry_n_pos((x + slot) % bucket.num_ents);
+
             let idx_ent = self.index_entry_at(index_entry_pos);
             
             if idx_ent.ptr == 0 {
                 return None;
             } else if idx_ent.hash == hash {
-                let kv = self.get_kv(&idx_ent);
+                let kv = self.get_kv(idx_ent);
                 if &kv.k[..] == key {
                     return Some(kv.v.clone());
                 } else {
@@ -235,15 +274,18 @@ impl CDB {
 #[cfg(test)]
 mod tests {
     use env_logger;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::string;
     use std::collections::hash_set;
+    use std::fs::File;
     use std::fs::remove_file;
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
     use std::path::PathBuf;
     use super::*;
     use tempfile::NamedTempFile;
     use tinycdb::Cdb as TCDB;
-    use proptest::collection::vec;
-    use proptest::prelude::*;
-    use proptest::string;
 
     fn arb_string_slice<'a>() -> BoxedStrategy<Vec<String>> {
         let st = string::string_regex("[a-z]+").unwrap();
@@ -342,10 +384,6 @@ mod tests {
             assert_eq!(Some(q), r);
         }
     }
-
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    use std::path::Path;
 
     #[test]
     fn test_with_dictionary() {

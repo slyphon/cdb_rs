@@ -32,9 +32,6 @@ pub fn run(db: &super::CDB, iters: u64) -> io::Result<Duration> {
                 } else {
                     miss += 1
                 }
-                if (hit + miss) % 1000 == 0 {
-                    debug!("did {}", hit + miss);
-                }
             }
             None => continue,
         };
