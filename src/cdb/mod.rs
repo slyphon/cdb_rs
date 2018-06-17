@@ -1,14 +1,15 @@
 use bytes::{Buf, Bytes, IntoBuf};
-use std::cmp;
 use std::fmt;
-use std::fs::File;
 use std::io;
-use std::io::prelude::*;
+use std::io::Write;
 
 pub mod randoread;
 pub mod errors;
 pub mod input;
 pub mod writer;
+pub mod storage;
+
+use self::storage::SliceFactory;
 
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
@@ -115,17 +116,13 @@ impl KV {
     }
 }
 
-pub struct CDB {
-    main_table: Bytes,
-    data: Bytes
+pub struct CDB<'a> {
+    data: &'a SliceFactory<'a>,
 }
 
-impl Clone for CDB {
+impl<'a> Clone for CDB<'a> {
     fn clone(&self) -> Self {
-        CDB {
-            main_table: self.main_table.clone(),
-            data: self.data.clone(),
-        }
+        CDB{data: self.data}
     }
 }
 
@@ -134,20 +131,20 @@ struct IndexEntry {
     ptr: usize,    // pointer to the absolute position of the data in the db
 }
 
-pub struct KVIter {
-    cdb: Box<CDB>,
+pub struct KVIter<'a> {
+    cdb: &'a CDB<'a>,
     bkt_idx: usize,
     entry_n: usize,
     bkt: Bucket,
 }
 
-impl KVIter {
-    fn new(cdb: &CDB) -> Self {
-        KVIter{cdb: Box::new(cdb.clone()), bkt_idx: 0, entry_n: 0, bkt: cdb.bucket_at(0)}
+impl<'a> KVIter<'a> {
+    fn new(cdb: &'a CDB<'a>) -> Self {
+        KVIter{cdb, bkt_idx: 0, entry_n: 0, bkt: cdb.bucket_at(0)}
     }
 }
 
-impl Iterator for KVIter {
+impl<'a> Iterator for KVIter<'a> {
     type Item = KV;
 
     fn next(&mut self) -> Option<KV> {
@@ -177,35 +174,25 @@ impl Iterator for KVIter {
     }
 }
 
-impl CDB {
+impl<'a> CDB<'a> {
     pub fn kvs_iter(&self) -> KVIter {
         KVIter::new(&self)
     }
-    
 
     fn bucket_at(&self, idx: usize) -> Bucket {
         assert!(idx < MAIN_TABLE_SIZE);
 
         let off = 8 * idx;
 
-        let mut b = self.main_table.slice(off, off + 8).into_buf();
+        let mut b = self.data.slice(off, off + 8).into_buf();
         let ptr = b.get_u32_le() as usize;
         let num_ents = b.get_u32_le() as usize;
 
         Bucket{ptr, num_ents}
     }
 
-    pub fn load(path: &str) -> io::Result<CDB> {
-        let mut f = File::open(path)?;
-        let mut buffer = Vec::new();
-        f.read_to_end(&mut buffer)?;
-
-        let bytes = Bytes::from(buffer);
-
-        Ok(CDB {
-            data: bytes.clone(),
-            main_table: bytes.slice_to(MAIN_TABLE_SIZE_BYTES),
-        })
+    pub fn new(sf: &'a SliceFactory) -> CDB<'a> {
+        CDB{data: sf}
     }
 
     // returns the index entry at absolute position 'pos' in the db
@@ -235,10 +222,10 @@ impl CDB {
         let k = self.data.slice(kstart, kstart + ksize);
         let v = self.data.slice(vstart, vstart + vsize);
 
-        KV { k, v }
+        KV { k: Bytes::from(k), v: Bytes::from(v) }
     }
 
-    pub fn get<'a>(&self, key: &[u8]) -> Option<Bytes> {
+    pub fn get(&self, key: &[u8], buf: &mut Vec<u8>) -> Option<usize> {
         let key = key.into();
         let hash = CDBHash::new(key);
         let bucket = self.bucket_at(hash.table());
@@ -260,7 +247,8 @@ impl CDB {
             } else if idx_ent.hash == hash {
                 let kv = self.get_kv(idx_ent);
                 if &kv.k[..] == key {
-                    return Some(kv.v.clone());
+                    buf.write_all(&kv.k[..]).unwrap();
+                    return Some(kv.k.len());
                 } else {
                     continue;
                 }
@@ -295,7 +283,7 @@ mod tests {
     struct QueryResult(String, Option<String>);
 
     #[allow(dead_code)]
-    fn create_temp_cdb(kvs: &[(&str, &str)]) -> io::Result<CDB> {
+    fn create_temp_cdb<'a>(kvs: &Vec<(String, String)>) -> io::Result<SliceFactory<'a>> {
         let path: PathBuf;
 
         {
@@ -319,15 +307,19 @@ mod tests {
             }
         }).unwrap();
 
-        let cdb = CDB::load(path.to_str().unwrap())?;
+        let f = File::open(path)?;
+        let sf = self::storage::SliceFactory::load(f)?;
 
-        Ok(cdb)
+        Ok(sf)
     }
 
     proptest! {
         #[test]
         fn qc_key_and_value_retrieval(ref xs in arb_string_slice()) {
-            for QueryResult(q, r) in make_and_then_read(xs){
+            let sf = make_temp_cdb_single_vals(&xs);
+            let cdb = CDB::new(&sf);
+
+            for QueryResult(q, r) in read_keys(cdb, &xs) {
                 prop_assert_eq!(
                     Some(q),
                     r
@@ -338,25 +330,22 @@ mod tests {
 
     type QueryResultIter<'a> = Box<Iterator<Item = QueryResult> + 'a>;
 
-    fn read_keys<'a>(cdb: CDB, xs: &'a Vec<String>) -> QueryResultIter<'a> {
+    fn read_keys<'a>(cdb: CDB<'a>, xs: &'a Vec<String>) -> QueryResultIter<'a> {
         Box::new(xs.iter().map(move |x| {
-            let res = cdb.get(x.as_ref());
+            let mut buf = Vec::with_capacity(1024 * 1024);
+            let res = cdb.get(x.as_ref(), &mut buf);
             QueryResult(
                 x.clone(),
-                res.map(|v| String::from_utf8(v.to_vec()).unwrap()),
+                res.map(|_| String::from_utf8(buf).unwrap()),
             )
         }))
     }
 
     #[allow(dead_code)]
-    fn make_temp_cdb_single_vals(xs: &Vec<String>) -> CDB {
-        let kvs: Vec<(&str, &str)> = xs.iter().map(|k| (k.as_ref(), k.as_ref())).collect();
-        create_temp_cdb(&kvs[..]).unwrap()
-    }
-
-    #[allow(dead_code)]
-    fn make_and_then_read<'a>(xs: &'a Vec<String>) -> QueryResultIter<'a> {
-        read_keys(make_temp_cdb_single_vals(xs), xs)
+    fn make_temp_cdb_single_vals(xs: &Vec<String>) -> SliceFactory {
+        let kvs: Vec<(String, String)> =
+            xs.iter().map(|k| (k.to_owned(), k.to_owned())).collect();
+        create_temp_cdb(&kvs).unwrap()
     }
 
     #[test]
@@ -378,7 +367,8 @@ mod tests {
         ];
         let arg = strings.iter().map(|s| (*s).to_owned()).collect();
 
-        let cdb = make_temp_cdb_single_vals(&arg);
+        let sf = make_temp_cdb_single_vals(&arg);
+        let cdb = CDB::new(&sf);
 
         for QueryResult(q, r) in read_keys(cdb, &arg) {
             assert_eq!(Some(q), r);
@@ -399,7 +389,8 @@ mod tests {
             }
         }
 
-        let cdb = make_temp_cdb_single_vals(&args);
+        let sf = make_temp_cdb_single_vals(&args);
+        let cdb = CDB::new(&sf);
 
         for QueryResult(q, r) in read_keys(cdb, &args) {
             assert_eq!(Some(q), r);

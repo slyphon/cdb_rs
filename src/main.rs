@@ -2,27 +2,47 @@ extern crate cdb_rs;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+#[macro_use] extern crate clap;
+extern crate memmap;
 
-use std::env;
 use std::io;
-use std::path;
 use std::time::Duration;
+use std::fs::File;
 
 use cdb_rs::cdb;
+use cdb_rs::cdb::storage::SliceFactory;
+use cdb_rs::cdb::randoread::RandoConfig;
+use memmap::Mmap;
+
+use clap::ArgMatches;
 
 fn dur2sec(d: &Duration) -> f64  {
     d.as_secs() as f64 + (d.subsec_nanos() as f64 * 1e-9)
 }
 
-fn randoread(filename: &str, iters: u64) -> io::Result<()> {
-    let db = cdb::CDB::load(filename)?;
+fn randoread(filename: &str, config: &RandoConfig) -> io::Result<()> {
+    let mmap: Mmap;
+    let sf: SliceFactory;
 
-    let d = cdb::randoread::run(&db, iters)?;
+    let db =
+        if config.use_mmap {
+            mmap = SliceFactory::make_map(filename)?;
+            sf = SliceFactory::MmapStorage(&mmap);
+            cdb::CDB::new(&sf)
+        } else {
+            {
+                let mut f = File::open(filename)?;
+                sf = SliceFactory::load(f)?;
+            }
+            cdb::CDB::new(&sf)
+        };
+
+    let d = cdb::randoread::run(&db, &config)?;
     let d2f = dur2sec(&d);
-    let rate = iters as f64 / d2f;
+    let rate = config.iters as f64 / d2f;
 
     info!(
-        "{} iters in {} sec, {:.3} op/sec", iters, d2f, rate
+        "{} iters in {} sec, {:.3} op/sec", config.iters, d2f, rate
     );
     Ok(())
 }
@@ -33,23 +53,41 @@ fn main() {
         Err(_) => "",   // wtfever
     };
 
-    let args: Vec<String> = env::args().collect();
+    let matches: ArgMatches = clap_app!(randoread =>
+        (version: "0.1.0")
+        (author: "Jonathan Simms <jsimms@twitter.com>")
+        (@arg ITERS: -i --iters [N] "number of iterations to do")
+        (@arg PROB: -p --probability [N] "probability filter for keys, float [0.0, 1.0)")
+        (@arg NKEYS: -k --numkeys [N] "max number of keys to test with")
+        (@arg MMAP: -M --mmap "use alternate mmap implmeentation (experimental on linux)")
+        (@arg INPUT: +required "the .cdb file to test")
+    ).get_matches();
 
-    let progname =
-        path::Path::new(&args[0])
-            .file_name()
-            .and_then(|fname| fname.to_str())
-            .unwrap_or("cdbrs");
+    let mut rc = RandoConfig::new();
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} /path/to/data.cdb", progname);
-        std::process::exit(1);
+    if let Some(val) = matches.value_of("ITERS") {
+        rc.iters(val.parse().unwrap());
     }
 
-    let filename = &args[1];
+    if let Some(p) = matches.value_of("PROB") {
+        rc.probability(p.parse().unwrap());
+    }
+
+    if let Some(p) = matches.value_of("NKEYS") {
+        rc.max_keys(p.parse().unwrap());
+    }
+
+    match matches.occurrences_of("MMAP") {
+        0 => rc.use_mmap(false),
+        _ => rc.use_mmap(true),
+    };
+
+    let filename = matches.value_of("INPUT").unwrap();
+
+    debug!("using config: {:?}", rc);
 
     std::process::exit(
-        match randoread(filename, 100_000_000) {
+        match randoread(filename, &rc) {
             Ok(_) => 0,
             Err(err) => {
                 eprintln!("error: {:?}", err);

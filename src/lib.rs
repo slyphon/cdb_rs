@@ -10,5 +10,6 @@ extern crate tempfile;
 #[macro_use] extern crate proptest;
 
 extern crate tinycdb;
+extern crate clap;
 
 pub mod cdb;

@@ -4,15 +4,24 @@ version = "0.1.0"
 authors = ["Jonathan D. Simms <jsimms@twitter.com>"]
 
 [dependencies]
-bytes = "0.4"
-rand = "0.5"
-memmap = "0.6.2"
-itertools = "0.6"
-log = "0.4"
-env_logger = "0.5.10"
-tempfile = "3"
-proptest = "0.7.1"
+bytes = "~0.4"
+rand = "~0.5"
+memmap = "~0.6.2"
+itertools = "~0.6"
+log = "~0.4"
+env_logger = "~0.5.10"
+tempfile = "~3"
+proptest = "~0.7.1"
+clap = "~2.31.0"
 
 [dependencies.tinycdb]
 git = "https://github.com/andrew-d/tinycdb-rs"
 
+
+[profile.release]
+opt-level = 3
+debug = true
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1

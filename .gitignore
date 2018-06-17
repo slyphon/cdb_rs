@@ -3,3 +3,4 @@
 **/*.rs.bk
 .vscode/
 *.cdb
+perf.data*
