@@ -3,6 +3,8 @@ use memmap::{Mmap, MmapOptions};
 use std::fs::File;
 use std::io;
 use std::io::{Read,Cursor};
+use crypto::md5::Md5;
+use crypto::digest::Digest;
 
 
 pub enum SliceFactory<'a> {
@@ -26,6 +28,7 @@ impl<'a> SliceFactory<'a> {
 
         let mut buf = [0u8; BUF_LEN];
         let mut count = 0;
+        let mut md5 = Md5::new();
 
         debug!("begin pretouch pages");
         {
@@ -36,14 +39,16 @@ impl<'a> SliceFactory<'a> {
                     let mut buf = Vec::with_capacity(remain);
                     cur.copy_to_slice(&mut buf[..]);
                     count += buf.len();
+                    md5.input(&buf);
                     break
                 } else {
                     cur.copy_to_slice(&mut buf);
                     count += BUF_LEN;
+                    md5.input(&buf);
                 }
             }
         }
-        debug!("end pretouch pages: {} bytes", count);
+        debug!("end pretouch pages: {} bytes, md5: {}", count, md5.result_str());
 
         Ok(mmap)
     }
