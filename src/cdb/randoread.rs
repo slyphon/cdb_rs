@@ -53,16 +53,21 @@ impl RandoConfig {
 pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
     let mut rng = thread_rng();
 
-    let keys = {
-        let mut ks: Vec<Bytes> = db.kvs_iter()
-            .filter(|_| rng.gen::<f32>() < config.probability)
-            .take(config.max_keys)
-            .map(|kv| kv.k)
-            .collect();
+    let mut keys = {
+        let mut ks: Vec<Bytes> =
+            db.kvs_iter().map(|kv| kv.k).collect();
 
         ks.shrink_to_fit();
         ks
     };
+
+    rng.shuffle(&mut keys);
+
+    let keyiter =
+        keys.iter()
+            .take(config.iters as usize)
+            .cycle()
+            .take(config.iters as usize);
 
     eprintln!("starting test using {} sampled keys", keys.len());
     let start = Instant::now();
@@ -72,19 +77,15 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
     let mut bytes = 0;
 
     let mut buf: Vec<u8> = Vec::with_capacity(1024 * 1024);
-    for _ in 0..config.iters {
+
+    for k in keyiter {
         buf.clear();
-        match rng.choose(&keys) {
-            Some(k) => {
-                if db.get(&k[..], &mut buf).is_some() {
-                    hit += 1;
-                    bytes += buf.len();
-                } else {
-                    miss += 1
-                }
-            }
-            None => continue,
-        };
+        if db.get(&k[..], &mut buf).is_some() {
+            hit += 1;
+            bytes += buf.len();
+        } else {
+            miss += 1
+        }
     }
 
     let hitrate = (hit as f64 / config.iters as f64) * 100.0;

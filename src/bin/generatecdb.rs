@@ -10,7 +10,7 @@ use std::io::Write;
 
 fn alpha(min: usize, max: usize) -> String {
     thread_rng().sample_iter(&Alphanumeric).take(
-        thread_rng().gen_range(min, max)
+        if min == max { min } else { thread_rng().gen_range(min, max) }
     ).collect()
 }
 

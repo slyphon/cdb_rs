@@ -41,9 +41,7 @@ fn randoread(filename: &str, config: &RandoConfig) -> io::Result<()> {
     let d2f = dur2sec(&d);
     let rate = config.iters as f64 / d2f;
 
-    info!(
-        "{} iters in {} sec, {:.3} op/sec", config.iters, d2f, rate
-    );
+    info!("{} iters in {:.3} sec, {:.3} op/sec", config.iters, d2f, rate);
     Ok(())
 }
 
