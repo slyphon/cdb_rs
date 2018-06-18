@@ -179,6 +179,7 @@ impl<'a> CDB<'a> {
         KVIter::new(&self)
     }
 
+    #[inline]
     fn bucket_at(&self, idx: usize) -> Bucket {
         assert!(idx < MAIN_TABLE_SIZE);
 
@@ -196,6 +197,7 @@ impl<'a> CDB<'a> {
     }
 
     // returns the index entry at absolute position 'pos' in the db
+    #[inline]
     fn index_entry_at(&self, pos: IndexEntryPos) -> IndexEntry {
         let pos: usize = pos.into();
 
@@ -210,6 +212,7 @@ impl<'a> CDB<'a> {
         IndexEntry { hash, ptr }
     }
 
+    #[inline]
     fn get_kv(&self, ie: IndexEntry) -> KV {
         let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE).into_buf();
 
@@ -241,7 +244,7 @@ impl<'a> CDB<'a> {
             let index_entry_pos = bucket.entry_n_pos((x + slot) % bucket.num_ents);
 
             let idx_ent = self.index_entry_at(index_entry_pos);
-            
+
             if idx_ent.ptr == 0 {
                 return None;
             } else if idx_ent.hash == hash {

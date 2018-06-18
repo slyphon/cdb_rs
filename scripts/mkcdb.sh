@@ -14,7 +14,9 @@ trap cleanup EXIT
 
 INPUT="$TEMP/cdbin"
 
-cargo run --release --bin generatecdb |head -n 5000|pv > "$INPUT"
+NUM_RECS=${NUM_RECS:-5000}
+
+cargo run --release --bin generatecdb |head -n $NUM_RECS|pv > "$INPUT"
 echo '' >> $INPUT
 
 cdb -c dict.cdb "$INPUT"

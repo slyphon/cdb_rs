@@ -1,9 +1,8 @@
 use bytes::{Buf,Bytes};
-use memmap::Mmap;
+use memmap::{Mmap, MmapOptions};
 use std::fs::File;
 use std::io;
-use std::io::{Read,Write,Cursor};
-use std::io::prelude::*;
+use std::io::{Read,Cursor};
 
 
 pub enum SliceFactory<'a> {
@@ -23,7 +22,7 @@ impl<'a> SliceFactory<'a> {
 
     pub fn make_map(path: &str) -> io::Result<Mmap> {
         let f = File::open(path)?;
-        let mmap: Mmap = unsafe { Mmap::map(&f)? };
+        let mmap: Mmap = unsafe { MmapOptions::new().map_private(&f)? };
 
         let mut buf = [0u8; BUF_LEN];
         let mut count = 0;

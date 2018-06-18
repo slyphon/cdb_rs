@@ -4,3 +4,4 @@
 .vscode/
 *.cdb
 perf.data*
+*.cdb*

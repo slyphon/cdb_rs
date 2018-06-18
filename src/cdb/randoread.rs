@@ -69,6 +69,7 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
 
     let mut hit = 0;
     let mut miss = 0;
+    let mut bytes = 0;
 
     let mut buf: Vec<u8> = Vec::with_capacity(1024 * 1024);
     for _ in 0..config.iters {
@@ -76,7 +77,8 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
         match rng.choose(&keys) {
             Some(k) => {
                 if db.get(&k[..], &mut buf).is_some() {
-                    hit += 1
+                    hit += 1;
+                    bytes += buf.len();
                 } else {
                     miss += 1
                 }
@@ -88,11 +90,11 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
     let hitrate = (hit as f64 / config.iters as f64) * 100.0;
 
     debug!(
-        "hit: {}, miss: {}, ratio: {ratio:.*}%",
+        "hit: {}, miss: {}, ratio: {:.3}%, bytes: {}",
         hit,
         miss,
-        3,
-        ratio = hitrate
+        hitrate,
+        bytes
     );
 
     Ok(start.elapsed())
