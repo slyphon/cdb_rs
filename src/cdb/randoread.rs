@@ -69,7 +69,7 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
             .cycle()
             .take(config.iters as usize);
 
-    eprintln!("starting test using {} sampled keys", keys.len());
+    eprintln!("starting test using {} sampled keys", config.iters);
     let start = Instant::now();
 
     let mut hit = 0;
