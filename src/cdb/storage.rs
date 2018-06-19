@@ -4,11 +4,9 @@ use crypto::md5::Md5;
 use memmap::{Mmap, MmapOptions};
 use std::cell::RefCell;
 use std::fs::File;
-use std::io;
-use std::io::{Cursor, Read, SeekFrom};
-use std::io::prelude::*;
-use std::ops::Range;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::io::{Cursor, Read};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::fs::FileExt;
 use super::Result;
 
 pub enum SliceFactory<'a> {
@@ -19,11 +17,16 @@ pub enum SliceFactory<'a> {
 
 const BUF_LEN: usize = 8192;
 
+pub fn readybuf(size: usize) -> BytesMut {
+    let mut b = BytesMut::with_capacity(size);
+    b.resize(size, 0);
+    b
+}
+
 impl<'a> SliceFactory<'a> {
     pub fn load(mut f: File) -> Result<SliceFactory<'a>> {
         let mut buffer = Vec::new();
         f.read_to_end(&mut buffer)?;
-
         Ok(SliceFactory::HeapStorage(Bytes::from(buffer)))
     }
 
@@ -41,11 +44,11 @@ impl<'a> SliceFactory<'a> {
             loop {
                 let remain = cur.remaining();
                 if remain < BUF_LEN {
-                    let mut buf = Vec::with_capacity(remain);
+                    let mut buf = readybuf(remain);
                     cur.copy_to_slice(&mut buf[..]);
                     count += buf.len();
                     md5.input(&buf);
-                    break
+                    break;
                 } else {
                     cur.copy_to_slice(&mut buf);
                     count += BUF_LEN;
@@ -53,31 +56,36 @@ impl<'a> SliceFactory<'a> {
                 }
             }
         }
-        debug!("end pretouch pages: {} bytes, md5: {}", count, md5.result_str());
+        debug!(
+            "end pretouch pages: {} bytes, md5: {}",
+            count,
+            md5.result_str()
+        );
 
         Ok(mmap)
     }
 
-    pub fn make_filewrap(path: &str) -> Result<SliceFactory<'a>> {
-        let f = File::open(path)?;
+    pub fn make_filewrap(f: File) -> Result<SliceFactory<'a>> {
         Ok(SliceFactory::StdioStorage(FileWrap::new(f)))
     }
 
-    pub fn slice(&self, rng: Range<usize>) -> Result<Bytes> {
-        if rng.end == rng.start {
+    pub fn slice(&self, start: usize, end: usize) -> Result<Bytes> {
+        assert!(end >= start);
+
+        if end == start {
             return Ok(Bytes::new());
         }
 
-        let range_len = rng.start - rng.end;
-        
+        let range_len = end - start;
+
         match self {
-            SliceFactory::HeapStorage(bytes) => Ok(Bytes::from(&bytes[rng])),
+            SliceFactory::HeapStorage(bytes) => Ok(Bytes::from(&bytes[start..end])),
             SliceFactory::MmapStorage(mmap) => {
-                let mut v = BytesMut::with_capacity(range_len);
-                v.extend_from_slice(&mmap[rng]);
+                let mut v = Vec::with_capacity(range_len);
+                v.extend_from_slice(&mmap[start..end]);
                 Ok(Bytes::from(v))
-            },
-            SliceFactory::StdioStorage(filewrap) => filewrap.slice(rng),
+            }
+            SliceFactory::StdioStorage(filewrap) => filewrap.slice(start, end),
         }
     }
 }
@@ -93,54 +101,115 @@ impl<'a> Clone for SliceFactory<'a> {
 }
 
 pub struct FileWrap {
-    file: RefCell<File>
+    inner: RefCell<File>,
 }
 
 impl FileWrap {
     fn new(f: File) -> Self {
-        FileWrap{file: RefCell::new(f)}
-    }
-
-    fn slice(&self, rng: Range<usize>) -> Result<Bytes> {
-        let mut buf = BytesMut::with_capacity(rng.end - rng.start);
-        {
-            let mut fp = self.file.borrow_mut();
-            fp.seek(SeekFrom::Start(rng.start as u64))?;
-            fp.read(&mut buf)?;
+        FileWrap {
+            inner: RefCell::new(f),
         }
-        Ok(buf.freeze())
     }
 
-    fn dup(&self) -> Result<File> {
-        let rawfd = self.as_raw_fd();
-        let fd2 =
-            match unsafe { ::libc::dup(rawfd) } {
-                -1 => return Err(io::Error::last_os_error().into()),
-                fd => fd
-            };
+    fn slice(&self, start: usize, end: usize) -> Result<Bytes> {
+        assert!(end >= start);
+        let mut buf = readybuf(end - start);
+        {
+            let fp = self.inner.borrow_mut();
+            fp.read_at(&mut buf, start as u64)?;
+            trace!("read: {:?}", buf);
+        }
+        Ok(Bytes::from(buf))
+    }
 
-        Ok(unsafe{File::from_raw_fd(fd2)})
+    #[cfg(test)]
+    fn temp() -> Result<FileWrap> {
+        use tempfile;
+        let tmp: File = tempfile::tempfile()?;
+        let fw = FileWrap::new(tmp);
+        Ok(fw)
     }
 }
 
 impl AsRawFd for FileWrap {
     fn as_raw_fd(&self) -> RawFd {
-        let fp = self.file.borrow_mut();
+        let fp = self.inner.borrow_mut();
         fp.as_raw_fd()
     }
 }
 
 impl Clone for FileWrap {
     fn clone(&self) -> Self {
-        // NOTE: this is "a bit shit" as yschimke would say
-        // Clone should probably never panic (?), but since
-        // dup() returns a Result, we unwrap it here. this whole
-        // API should likely be changed to avoid this
-        let f = self.dup().unwrap();
-        FileWrap::new(f)
+        let f = self.inner.borrow_mut();
+        FileWrap::new(f.try_clone().unwrap())
     }
 }
 
 pub trait Sliceable {
     fn slice(&self, start: usize, end: usize) -> Result<Bytes>;
 }
+
+struct BMString(BytesMut);
+
+impl ToString for BMString {
+    fn to_string(&self) -> String {
+       String::from(self)
+    }
+}
+
+impl<'a> From<&'a BMString> for String {
+    fn from(bm: &'a BMString) -> Self {
+        String::from_utf8(bm.0.to_vec()).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+    use super::*;
+    use tempfile;
+    use std::io::prelude::*;
+
+    fn assert_ok<T>(f: T)
+    where
+        T: Fn() -> Result<()>,
+    {
+        f().unwrap()
+    }
+
+
+    #[test]
+    fn basic_file_io_sanity() {
+        assert_ok(|| {
+            let mut tmp: File = tempfile::tempfile()?;
+
+            tmp.write_all("abcdefghijklmnopqrstuvwxyz".as_bytes())?;
+            tmp.sync_all()?;
+
+            let mut buf = BytesMut::with_capacity(3);
+            buf.resize(3, 0);
+            let n = tmp.read_at(&mut buf, 23)?;
+            assert_eq!(n, 3);
+            assert_eq!(&buf[..], "xyz".as_bytes());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn file_wrap_slice_test() {
+        assert_ok(||{
+            let fw = FileWrap::temp()?;
+
+            {
+                let mut f = fw.inner.borrow_mut();
+                f.write_all("abcdefghijklmnopqrstuvwxyz".as_bytes())?;
+                f.sync_all()?;
+            }
+
+            assert_eq!(fw.slice(3, 5)?, "de".as_bytes());
+            Ok(())
+        })
+    }
+}
+
+

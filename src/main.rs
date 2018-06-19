@@ -32,8 +32,12 @@ fn randoread(filename: &str, config: &RandoConfig) -> Result<()> {
             cdb::CDB::new(&sf)
         } else {
             {
-                let mut f = File::open(filename)?;
-                sf = SliceFactory::load(f)?;
+                let f = File::open(filename)?;
+                if config.use_stdio {
+                    sf = SliceFactory::make_filewrap(f)?;
+                } else {
+                    sf = SliceFactory::load(f)?;
+                }
             }
             cdb::CDB::new(&sf)
         };
@@ -58,7 +62,8 @@ fn main() {
         (@arg ITERS: -i --iters [N] "number of iterations to do")
         (@arg PROB: -p --probability [N] "probability filter for keys, float [0.0, 1.0)")
         (@arg NKEYS: -k --numkeys [N] "max number of keys to test with")
-        (@arg MMAP: -M --mmap "use alternate mmap implmeentation (experimental on linux)")
+        (@arg MMAP: -M --mmap conflicts_with[STDIO] "use alternate mmap implmeentation (experimental on linux)")
+        (@arg STDIO: -S --stdio conflicts_with[MMAP] "use stdio implementation")
         (@arg INPUT: +required "the .cdb file to test")
     ).get_matches();
 
@@ -80,6 +85,12 @@ fn main() {
         0 => rc.use_mmap(false),
         _ => rc.use_mmap(true),
     };
+
+    match matches.occurrences_of("STDIO") {
+        0 => rc.use_stdio(false),
+        _ => rc.use_stdio(true),
+    };
+
 
     let filename = matches.value_of("INPUT").unwrap();
 

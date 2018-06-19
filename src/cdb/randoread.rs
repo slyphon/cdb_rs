@@ -17,6 +17,8 @@ pub struct RandoConfig {
     pub iters: u64,
 
     pub use_mmap: bool,
+
+    pub use_stdio: bool,
 }
 
 impl RandoConfig {
@@ -26,6 +28,7 @@ impl RandoConfig {
             max_keys: 10_000,
             iters: 10_000,
             use_mmap: false,
+            use_stdio: false,
         }
     }
 
@@ -46,6 +49,11 @@ impl RandoConfig {
 
     pub fn use_mmap<'a>(&'a mut self, b: bool) -> &'a mut RandoConfig {
         self.use_mmap = b;
+        self
+    }
+
+    pub fn use_stdio<'a>(&'a mut self, b: bool) -> &'a mut RandoConfig {
+        self.use_stdio = b;
         self
     }
 }

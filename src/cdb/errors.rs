@@ -3,12 +3,14 @@ use std::fmt;
 use std::io;
 use std::num::ParseIntError;
 use std::str::Utf8Error;
+use std::ffi::NulError;
 
 #[derive(Debug)]
 pub enum CDBError {
     IOError(io::Error),
     UTF8Error(::std::str::Utf8Error),
     ParseError(ParseIntError),
+    NulError(NulError),
 }
 
 impl From<ParseIntError> for CDBError {
@@ -29,12 +31,17 @@ impl From<io::Error> for CDBError {
     }
 }
 
+impl From<NulError> for CDBError {
+    fn from(err: NulError) -> CDBError { CDBError::NulError(err) }
+}
+
 impl error::Error for CDBError {
     fn description(&self) -> &str {
         match *self {
             CDBError::IOError(ref err) => err.description(),
             CDBError::UTF8Error(ref err) => err.description(),
             CDBError::ParseError(ref err) => err.description(),
+            CDBError::NulError(ref err) => err.description(),
         }
     }
 
@@ -43,6 +50,7 @@ impl error::Error for CDBError {
             CDBError::IOError(ref err) => Some(err),
             CDBError::UTF8Error(ref err) => Some(err),
             CDBError::ParseError(ref err) => Some(err),
+            CDBError::NulError(ref err) => Some(err),
         }
     }
 }
@@ -53,6 +61,7 @@ impl fmt::Display for CDBError {
             CDBError::IOError(ref err) => err.fmt(f),
             CDBError::UTF8Error(ref err) => err.fmt(f),
             CDBError::ParseError(ref err) => err.fmt(f),
+            CDBError::NulError(ref err) => err.fmt(f),
         }
     }
 }

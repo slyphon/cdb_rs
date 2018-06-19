@@ -202,9 +202,12 @@ impl<'a> CDB<'a> {
 
         let off = 8 * idx;
 
-        let mut b = self.data.slice(off..off + 8)?.into_buf();
-        let ptr = b.get_u32_le() as usize;
-        let num_ents = b.get_u32_le() as usize;
+        let b = self.data.slice(off, off + 8)?;
+        assert_eq!(b.len(), 8);
+        trace!("bucket_at idx: {}, got buf: {:?}", idx, b);
+
+        let ptr = b.slice_to(4).into_buf().get_u32_le() as usize;
+        let num_ents = b.slice_from(4).into_buf().get_u32_le() as usize;
 
         Ok(Bucket{ptr, num_ents})
     }
@@ -222,7 +225,7 @@ impl<'a> CDB<'a> {
             panic!("position {:?} was in the main table!", pos)
         }
 
-        let mut b = self.data.slice(pos..pos + 8)?.into_buf();
+        let mut b = self.data.slice(pos, pos + 8)?.into_buf();
         let hash = CDBHash(b.get_u32_le());
         let ptr = b.get_u32_le() as usize;
 
@@ -231,16 +234,16 @@ impl<'a> CDB<'a> {
 
     #[inline]
     fn get_kv(&self, ie: IndexEntry) -> Result<KV> {
-        let mut b = self.data.slice(ie.ptr..(ie.ptr + DATA_HEADER_SIZE))?.into_buf();
+        let b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE)?;
 
-        let ksize = b.get_u32_le() as usize;
-        let vsize = b.get_u32_le() as usize;
+        let ksize = b.slice_to(4).into_buf().get_u32_le() as usize;
+        let vsize = b.slice_from(4).into_buf().get_u32_le() as usize;
 
         let kstart = ie.ptr + DATA_HEADER_SIZE;
         let vstart = kstart + ksize;
 
-        let k = self.data.slice(kstart..kstart + ksize)?;
-        let v = self.data.slice(vstart..vstart + vsize)?;
+        let k = self.data.slice(kstart, kstart + ksize)?;
+        let v = self.data.slice(vstart, vstart + vsize)?;
 
         Ok(KV{k: Bytes::from(k), v: Bytes::from(v)})
     }
