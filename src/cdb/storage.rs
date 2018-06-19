@@ -5,7 +5,7 @@ use memmap::{Mmap, MmapOptions};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Cursor, Read};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::os::unix::fs::FileExt;
 use super::Result;
 
@@ -131,13 +131,6 @@ impl FileWrap {
     }
 }
 
-impl AsRawFd for FileWrap {
-    fn as_raw_fd(&self) -> RawFd {
-        let fp = self.inner.borrow_mut();
-        fp.as_raw_fd()
-    }
-}
-
 impl Clone for FileWrap {
     fn clone(&self) -> Self {
         let f = self.inner.borrow_mut();
@@ -145,9 +138,6 @@ impl Clone for FileWrap {
     }
 }
 
-pub trait Sliceable {
-    fn slice(&self, start: usize, end: usize) -> Result<Bytes>;
-}
 
 struct BMString(BytesMut);
 
@@ -176,7 +166,6 @@ mod tests {
     {
         f().unwrap()
     }
-
 
     #[test]
     fn basic_file_io_sanity() {

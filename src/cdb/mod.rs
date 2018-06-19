@@ -1,8 +1,10 @@
 use bytes::{Buf, Bytes, IntoBuf};
+use std::default::Default;
 use std::fmt;
 use std::io;
 use std::io::Write;
 use std::result;
+use std::ops::Deref;
 
 pub mod randoread;
 pub mod errors;
@@ -121,15 +123,6 @@ impl KV {
     }
 }
 
-pub struct CDB<'a> {
-    data: &'a SliceFactory<'a>,
-}
-
-impl<'a> Clone for CDB<'a> {
-    fn clone(&self) -> Self {
-        CDB{data: self.data}
-    }
-}
 
 struct IndexEntry {
     hash: CDBHash, // the hash of the stored key
@@ -191,6 +184,16 @@ impl<'a> Iterator for KVIter<'a> {
     }
 }
 
+pub struct CDB<'a> {
+    data: &'a SliceFactory<'a>,
+}
+
+impl<'a> Clone for CDB<'a> {
+    fn clone(&self) -> Self {
+        CDB{data: self.data}
+    }
+}
+
 impl<'a> CDB<'a> {
     pub fn kvs_iter(&self) -> Result<KVIter> {
         Ok(KVIter::new(&self)?)
@@ -206,8 +209,10 @@ impl<'a> CDB<'a> {
         assert_eq!(b.len(), 8);
         trace!("bucket_at idx: {}, got buf: {:?}", idx, b);
 
-        let ptr = b.slice_to(4).into_buf().get_u32_le() as usize;
-        let num_ents = b.slice_from(4).into_buf().get_u32_le() as usize;
+        let mut buf = b.into_buf();
+
+        let ptr = buf.get_u32_le() as usize;
+        let num_ents = buf.get_u32_le() as usize;
 
         Ok(Bucket{ptr, num_ents})
     }
