@@ -202,7 +202,7 @@ impl<'a> CDB<'a> {
 
         let off = 8 * idx;
 
-        let mut b = self.data.slice(off, off + 8)?.into_buf();
+        let mut b = self.data.slice(off..off + 8)?.into_buf();
         let ptr = b.get_u32_le() as usize;
         let num_ents = b.get_u32_le() as usize;
 
@@ -222,7 +222,7 @@ impl<'a> CDB<'a> {
             panic!("position {:?} was in the main table!", pos)
         }
 
-        let mut b = self.data.slice(pos, pos + 8)?.into_buf();
+        let mut b = self.data.slice(pos..pos + 8)?.into_buf();
         let hash = CDBHash(b.get_u32_le());
         let ptr = b.get_u32_le() as usize;
 
@@ -231,7 +231,7 @@ impl<'a> CDB<'a> {
 
     #[inline]
     fn get_kv(&self, ie: IndexEntry) -> Result<KV> {
-        let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE)?.into_buf();
+        let mut b = self.data.slice(ie.ptr..(ie.ptr + DATA_HEADER_SIZE))?.into_buf();
 
         let ksize = b.get_u32_le() as usize;
         let vsize = b.get_u32_le() as usize;
@@ -239,8 +239,8 @@ impl<'a> CDB<'a> {
         let kstart = ie.ptr + DATA_HEADER_SIZE;
         let vstart = kstart + ksize;
 
-        let k = self.data.slice(kstart, kstart + ksize)?;
-        let v = self.data.slice(vstart, vstart + vsize)?;
+        let k = self.data.slice(kstart..kstart + ksize)?;
+        let v = self.data.slice(vstart..vstart + vsize)?;
 
         Ok(KV{k: Bytes::from(k), v: Bytes::from(v)})
     }
@@ -303,7 +303,7 @@ mod tests {
     struct QueryResult(String, Option<String>);
 
     #[allow(dead_code)]
-    fn create_temp_cdb<'a>(kvs: &Vec<(String, String)>) -> io::Result<SliceFactory<'a>> {
+    fn create_temp_cdb<'a>(kvs: &Vec<(String, String)>) -> Result<SliceFactory<'a>> {
         let path: PathBuf;
 
         {

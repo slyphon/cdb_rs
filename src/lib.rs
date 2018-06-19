@@ -12,5 +12,6 @@ extern crate tempfile;
 extern crate tinycdb;
 extern crate clap;
 extern crate crypto;
+extern crate libc;
 
 pub mod cdb;
