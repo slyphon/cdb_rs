@@ -1,5 +1,5 @@
 use super::KV;
-use super::errors::WriterError;
+use super::errors::CDBError;
 use bytes::*;
 use std::io::BufReader;
 use std::io::prelude::*;
@@ -12,19 +12,19 @@ const COMMA: u8 = 0x2c; // ASCII ','
 const COLON: u8 = 0x3a; // ASCII ':'
 const NL: u8 = 0x0a; // ASCII '\n'
 
-fn parse_digits(buf: &[u8]) -> Result<usize, WriterError> {
+fn parse_digits(buf: &[u8]) -> Result<usize, CDBError> {
     str::from_utf8(&buf)
-        .map_err(|err| WriterError::UTF8Error(err))
+        .map_err(|err| CDBError::UTF8Error(err))
         .and_then(|str| {
             str.parse::<usize>()
-                .map_err(|err| WriterError::ParseError(err))
+                .map_err(|err| CDBError::ParseError(err))
         })
 }
 
 const ARROW_BYTES: &[u8; 2] = b"->";
 
 // format: +1,3:a->xyz\n
-fn read_begin<T: Read>(input: &mut BufReader<T>) -> Result<Option<()>, WriterError> {
+fn read_begin<T: Read>(input: &mut BufReader<T>) -> Result<Option<()>, CDBError> {
     let mut buf = vec![0u8; 1];
 
     // consume a '+'
@@ -38,7 +38,7 @@ fn read_begin<T: Read>(input: &mut BufReader<T>) -> Result<Option<()>, WriterErr
     }
 }
 
-fn read_sizes<T: Read>(input: &mut BufReader<T>) -> Result<KVSizes, WriterError> {
+fn read_sizes<T: Read>(input: &mut BufReader<T>) -> Result<KVSizes, CDBError> {
     let mut buf: Vec<u8> = Vec::new();
 
     let r = input.read_until(COMMA, &mut buf)?;
@@ -58,7 +58,7 @@ fn read_sizes<T: Read>(input: &mut BufReader<T>) -> Result<KVSizes, WriterError>
     Ok(KVSizes(k, v))
 }
 
-fn read_kv<T: Read>(input: &mut BufReader<T>, kvs: &KVSizes) -> Result<KV, WriterError> {
+fn read_kv<T: Read>(input: &mut BufReader<T>, kvs: &KVSizes) -> Result<KV, CDBError> {
     let KVSizes(ksize, vsize) = kvs;
 
     let mut kbytes = vec![0u8; *ksize];
@@ -88,7 +88,7 @@ fn read_kv<T: Read>(input: &mut BufReader<T>, kvs: &KVSizes) -> Result<KV, Write
     })
 }
 
-fn read_one_record<T: Read>(input: &mut BufReader<T>) -> Result<Option<KV>, WriterError> {
+fn read_one_record<T: Read>(input: &mut BufReader<T>) -> Result<Option<KV>, CDBError> {
     match read_begin(input)? {
         None => Ok(None),
         Some(_) => read_sizes(input)
@@ -102,7 +102,7 @@ pub struct IterParser<T: Read> {
 }
 
 impl<T: Read> Iterator for IterParser<T> {
-    type Item = Result<KV, WriterError>;
+    type Item = Result<KV, CDBError>;
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         match read_one_record(&mut self.buf) {
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn parser_iter() {
         let reader = Bytes::from("+3,4:cat->ball\n\n").into_buf().reader();
-        let recs: Vec<Result<KV, WriterError>> = parse(reader).collect();
+        let recs: Vec<Result<KV, CDBError>> = parse(reader).collect();
 
         assert_eq!(recs.len(), 1);
         match recs[0] {

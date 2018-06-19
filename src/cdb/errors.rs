@@ -5,54 +5,54 @@ use std::num::ParseIntError;
 use std::str::Utf8Error;
 
 #[derive(Debug)]
-pub enum WriterError {
+pub enum CDBError {
     IOError(io::Error),
     UTF8Error(::std::str::Utf8Error),
     ParseError(ParseIntError),
 }
 
-impl From<ParseIntError> for WriterError {
-    fn from(err: ParseIntError) -> WriterError {
-        WriterError::ParseError(err)
+impl From<ParseIntError> for CDBError {
+    fn from(err: ParseIntError) -> CDBError {
+        CDBError::ParseError(err)
     }
 }
 
-impl From<Utf8Error> for WriterError {
-    fn from(err: Utf8Error) -> WriterError {
-        WriterError::UTF8Error(err)
+impl From<Utf8Error> for CDBError {
+    fn from(err: Utf8Error) -> CDBError {
+        CDBError::UTF8Error(err)
     }
 }
 
-impl From<io::Error> for WriterError {
-    fn from(err: io::Error) -> WriterError {
-        WriterError::IOError(err)
+impl From<io::Error> for CDBError {
+    fn from(err: io::Error) -> CDBError {
+        CDBError::IOError(err)
     }
 }
 
-impl error::Error for WriterError {
+impl error::Error for CDBError {
     fn description(&self) -> &str {
         match *self {
-            WriterError::IOError(ref err) => err.description(),
-            WriterError::UTF8Error(ref err) => err.description(),
-            WriterError::ParseError(ref err) => err.description(),
+            CDBError::IOError(ref err) => err.description(),
+            CDBError::UTF8Error(ref err) => err.description(),
+            CDBError::ParseError(ref err) => err.description(),
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
-            WriterError::IOError(ref err) => Some(err),
-            WriterError::UTF8Error(ref err) => Some(err),
-            WriterError::ParseError(ref err) => Some(err),
+            CDBError::IOError(ref err) => Some(err),
+            CDBError::UTF8Error(ref err) => Some(err),
+            CDBError::ParseError(ref err) => Some(err),
         }
     }
 }
 
-impl fmt::Display for WriterError {
+impl fmt::Display for CDBError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            WriterError::IOError(ref err) => err.fmt(f),
-            WriterError::UTF8Error(ref err) => err.fmt(f),
-            WriterError::ParseError(ref err) => err.fmt(f),
+            CDBError::IOError(ref err) => err.fmt(f),
+            CDBError::UTF8Error(ref err) => err.fmt(f),
+            CDBError::ParseError(ref err) => err.fmt(f),
         }
     }
 }

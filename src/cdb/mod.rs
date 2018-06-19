@@ -2,6 +2,7 @@ use bytes::{Buf, Bytes, IntoBuf};
 use std::fmt;
 use std::io;
 use std::io::Write;
+use std::result;
 
 pub mod randoread;
 pub mod errors;
@@ -11,11 +12,15 @@ pub mod storage;
 
 use self::storage::SliceFactory;
 
+pub use self::errors::CDBError;
+
 pub const STARTING_HASH: u32 = 5381;
 const MAIN_TABLE_SIZE: usize = 256;
 const MAIN_TABLE_SIZE_BYTES: usize = 2048;
 const END_TABLE_ENTRY_SIZE: usize = 8;
 const DATA_HEADER_SIZE: usize = 8;
+
+type Result<T> = result::Result<T, CDBError>;
 
 // idea from https://raw.githubusercontent.com/jothan/cordoba/master/src/lib.rs
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -72,7 +77,7 @@ struct Bucket {
 }
 
 impl fmt::Debug for Bucket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(
             f,
             "TableRec {{ ptr: {:>#010x}, num_ents: {:>#010x} }}",
