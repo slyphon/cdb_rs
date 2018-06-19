@@ -6,6 +6,7 @@ use std::io::{Read,Cursor};
 use crypto::md5::Md5;
 use crypto::digest::Digest;
 
+use super::Result;
 
 pub enum SliceFactory<'a> {
     HeapStorage(Bytes),
@@ -53,18 +54,18 @@ impl<'a> SliceFactory<'a> {
         Ok(mmap)
     }
 
-    pub fn slice(&self, start: usize, end: usize) -> Bytes {
+    pub fn slice(&self, start: usize, end: usize) -> Result<Bytes> {
         assert!(end >= start);
         if end == start {
-            return Bytes::new();
+            return Ok(Bytes::new());
         }
         
         match self {
-            SliceFactory::HeapStorage(bytes) => bytes.slice(start, end),
+            SliceFactory::HeapStorage(bytes) => Ok(bytes.slice(start, end)),
             SliceFactory::MmapStorage(mmap) => {
                 let mut v = Vec::with_capacity(end - start);
                 v.extend_from_slice(&mmap[start..end]);
-                Bytes::from(v)
+                Ok(Bytes::from(v))
             },
         }
     }
@@ -78,4 +79,8 @@ impl<'a> Clone for SliceFactory<'a> {
             SliceFactory::MmapStorage(mmap) => SliceFactory::MmapStorage(mmap)
         }
     }
+}
+
+pub trait Sliceable {
+    fn slice(&self, start: usize, end: usize) -> Result<Bytes>;
 }

@@ -5,7 +5,6 @@ extern crate env_logger;
 #[macro_use] extern crate clap;
 extern crate memmap;
 
-use std::io;
 use std::time::Duration;
 use std::fs::File;
 
@@ -14,13 +13,15 @@ use cdb_rs::cdb::storage::SliceFactory;
 use cdb_rs::cdb::randoread::RandoConfig;
 use memmap::Mmap;
 
+use cdb_rs::cdb::Result;
+
 use clap::ArgMatches;
 
 fn dur2sec(d: &Duration) -> f64  {
     d.as_secs() as f64 + (d.subsec_nanos() as f64 * 1e-9)
 }
 
-fn randoread(filename: &str, config: &RandoConfig) -> io::Result<()> {
+fn randoread(filename: &str, config: &RandoConfig) -> Result<()> {
     let mmap: Mmap;
     let sf: SliceFactory;
 

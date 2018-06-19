@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use rand::{thread_rng, Rng};
-use std::io;
 use std::time::{Duration, Instant};
+
+use super::Result;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RandoConfig {
@@ -50,12 +51,14 @@ impl RandoConfig {
 }
 
 
-pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
+pub fn run(db: &super::CDB, config: &RandoConfig) -> Result<Duration> {
     let mut rng = thread_rng();
 
     let mut keys = {
         let mut ks: Vec<Bytes> =
-            db.kvs_iter().map(|kv| kv.k).collect();
+            db.kvs_iter()?
+                .map(|kv| kv.unwrap().k)
+                .collect();
 
         ks.shrink_to_fit();
         ks
@@ -80,7 +83,7 @@ pub fn run(db: &super::CDB, config: &RandoConfig) -> io::Result<Duration> {
 
     for k in keyiter {
         buf.clear();
-        if db.get(&k[..], &mut buf).is_some() {
+        if db.get(&k[..], &mut buf)?.is_some() {
             hit += 1;
             bytes += buf.len();
         } else {

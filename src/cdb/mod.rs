@@ -20,7 +20,7 @@ const MAIN_TABLE_SIZE_BYTES: usize = 2048;
 const END_TABLE_ENTRY_SIZE: usize = 8;
 const DATA_HEADER_SIZE: usize = 8;
 
-type Result<T> = result::Result<T, CDBError>;
+pub type Result<T> = result::Result<T, CDBError>;
 
 // idea from https://raw.githubusercontent.com/jothan/cordoba/master/src/lib.rs
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -144,15 +144,16 @@ pub struct KVIter<'a> {
 }
 
 impl<'a> KVIter<'a> {
-    fn new(cdb: &'a CDB<'a>) -> Self {
-        KVIter{cdb, bkt_idx: 0, entry_n: 0, bkt: cdb.bucket_at(0)}
+    fn new(cdb: &'a CDB<'a>) -> Result<Self> {
+        let bkt = cdb.bucket_at(0)?;
+        Ok(KVIter{cdb, bkt_idx: 0, entry_n: 0, bkt})
     }
 }
 
 impl<'a> Iterator for KVIter<'a> {
-    type Item = KV;
+    type Item = Result<KV>;
 
-    fn next(&mut self) -> Option<KV> {
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.bkt_idx >= MAIN_TABLE_SIZE {
                 return None
@@ -162,39 +163,50 @@ impl<'a> Iterator for KVIter<'a> {
                 self.bkt_idx += 1;
                 self.entry_n = 0;
                 if self.bkt_idx < MAIN_TABLE_SIZE {
-                    self.bkt = self.cdb.bucket_at(self.bkt_idx);
+                    match self.cdb.bucket_at(self.bkt_idx) {
+                        Ok(bkt) => self.bkt = bkt,
+                        Err(err) => return Some(Err(err)),
+                    }
                 }
                 continue
             }
 
-            let idx_ent = self.cdb.index_entry_at(self.bkt.entry_n_pos(self.entry_n));
+            let idx_ent =
+                match self.cdb.index_entry_at(self.bkt.entry_n_pos(self.entry_n)) {
+                    Ok(index_entry) => index_entry,
+                    Err(err) => return Some(Err(err)),
+                };
+
             self.entry_n += 1;
             
             if idx_ent.ptr == 0 {
                 continue
             } else {
-                return Some(self.cdb.get_kv(idx_ent))
+                return match self.cdb.get_kv(idx_ent) {
+                    Ok(kv) => Some(Ok(kv)),
+                    Err(err) => Some(Err(err)),
+                }
             }
         }
     }
 }
 
 impl<'a> CDB<'a> {
-    pub fn kvs_iter(&self) -> KVIter {
-        KVIter::new(&self)
+    pub fn kvs_iter(&self) -> Result<KVIter> {
+        Ok(KVIter::new(&self)?)
     }
 
     #[inline]
-    fn bucket_at(&self, idx: usize) -> Bucket {
+    fn bucket_at(&self, idx: usize) -> Result<Bucket> {
         assert!(idx < MAIN_TABLE_SIZE);
 
         let off = 8 * idx;
 
-        let mut b = self.data.slice(off, off + 8).into_buf();
+        let mut b = self.data.slice(off, off + 8)?.into_buf();
         let ptr = b.get_u32_le() as usize;
         let num_ents = b.get_u32_le() as usize;
 
-        Bucket{ptr, num_ents}
+        Ok(Bucket{ptr, num_ents})
     }
 
     pub fn new(sf: &'a SliceFactory) -> CDB<'a> {
@@ -203,23 +215,23 @@ impl<'a> CDB<'a> {
 
     // returns the index entry at absolute position 'pos' in the db
     #[inline]
-    fn index_entry_at(&self, pos: IndexEntryPos) -> IndexEntry {
+    fn index_entry_at(&self, pos: IndexEntryPos) -> Result<IndexEntry> {
         let pos: usize = pos.into();
 
         if pos < MAIN_TABLE_SIZE_BYTES {
             panic!("position {:?} was in the main table!", pos)
         }
 
-        let mut b = self.data.slice(pos, pos + 8).into_buf();
+        let mut b = self.data.slice(pos, pos + 8)?.into_buf();
         let hash = CDBHash(b.get_u32_le());
         let ptr = b.get_u32_le() as usize;
 
-        IndexEntry { hash, ptr }
+        Ok(IndexEntry{hash, ptr})
     }
 
     #[inline]
-    fn get_kv(&self, ie: IndexEntry) -> KV {
-        let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE).into_buf();
+    fn get_kv(&self, ie: IndexEntry) -> Result<KV> {
+        let mut b = self.data.slice(ie.ptr, ie.ptr + DATA_HEADER_SIZE)?.into_buf();
 
         let ksize = b.get_u32_le() as usize;
         let vsize = b.get_u32_le() as usize;
@@ -227,20 +239,20 @@ impl<'a> CDB<'a> {
         let kstart = ie.ptr + DATA_HEADER_SIZE;
         let vstart = kstart + ksize;
 
-        let k = self.data.slice(kstart, kstart + ksize);
-        let v = self.data.slice(vstart, vstart + vsize);
+        let k = self.data.slice(kstart, kstart + ksize)?;
+        let v = self.data.slice(vstart, vstart + vsize)?;
 
-        KV { k: Bytes::from(k), v: Bytes::from(v) }
+        Ok(KV{k: Bytes::from(k), v: Bytes::from(v)})
     }
 
-    pub fn get(&self, key: &[u8], buf: &mut Vec<u8>) -> Option<usize> {
+    pub fn get(&self, key: &[u8], buf: &mut Vec<u8>) -> Result<Option<usize>> {
         let key = key.into();
         let hash = CDBHash::new(key);
-        let bucket = self.bucket_at(hash.table());
+        let bucket = self.bucket_at(hash.table())?;
 
         if bucket.num_ents == 0 {
             trace!("bucket empty, returning none");
-            return None;
+            return Ok(None);
         }
 
         let slot = hash.slot(bucket.num_ents);
@@ -248,22 +260,22 @@ impl<'a> CDB<'a> {
         for x in 0..bucket.num_ents {
             let index_entry_pos = bucket.entry_n_pos((x + slot) % bucket.num_ents);
 
-            let idx_ent = self.index_entry_at(index_entry_pos);
+            let idx_ent = self.index_entry_at(index_entry_pos)?;
 
             if idx_ent.ptr == 0 {
-                return None;
+                return Ok(None);
             } else if idx_ent.hash == hash {
-                let kv = self.get_kv(idx_ent);
+                let kv = self.get_kv(idx_ent)?;
                 if &kv.k[..] == key {
                     buf.write_all(&kv.k[..]).unwrap();
-                    return Some(kv.k.len());
+                    return Ok(Some(kv.k.len()));
                 } else {
                     continue;
                 }
             }
         }
 
-        None
+        Ok(None)
     }
 }
 
@@ -341,7 +353,7 @@ mod tests {
     fn read_keys<'a>(cdb: CDB<'a>, xs: &'a Vec<String>) -> QueryResultIter<'a> {
         Box::new(xs.iter().map(move |x| {
             let mut buf = Vec::with_capacity(1024 * 1024);
-            let res = cdb.get(x.as_ref(), &mut buf);
+            let res = cdb.get(x.as_ref(), &mut buf).unwrap();
             QueryResult(
                 x.clone(),
                 res.map(|_| String::from_utf8(buf).unwrap()),
