@@ -19,9 +19,6 @@ libc = "~0.2.42"
 [dependencies.tinycdb]
 git = "https://github.com/andrew-d/tinycdb-rs"
 
-[patch.crates-io]
-memmap = { path = "../memmap-rs" }
-
 [profile.release]
 opt-level = 3
 debug = true
