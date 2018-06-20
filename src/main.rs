@@ -11,7 +11,6 @@ use std::fs::File;
 use cdb_rs::cdb;
 use cdb_rs::cdb::storage::SliceFactory;
 use cdb_rs::cdb::randoread::RandoConfig;
-use memmap::Mmap;
 
 use cdb_rs::cdb::Result;
 
@@ -22,14 +21,11 @@ fn dur2sec(d: &Duration) -> f64  {
 }
 
 fn randoread(filename: &str, config: &RandoConfig) -> Result<()> {
-    let mmap: Mmap;
     let sf: SliceFactory;
 
     let db =
         if config.use_mmap {
-            mmap = SliceFactory::make_map(filename)?;
-            sf = SliceFactory::MmapStorage(&mmap);
-            cdb::CDB::new(&sf)
+            cdb::CDB::new(SliceFactory::make_map(filename)?)
         } else {
             {
                 let f = File::open(filename)?;
@@ -39,7 +35,7 @@ fn randoread(filename: &str, config: &RandoConfig) -> Result<()> {
                     sf = SliceFactory::load(f)?;
                 }
             }
-            cdb::CDB::new(&sf)
+            cdb::CDB::new(sf)
         };
 
     let d = cdb::randoread::run(&db, &config)?;

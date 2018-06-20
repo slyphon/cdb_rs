@@ -5,13 +5,14 @@ use memmap::{Mmap, MmapOptions};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Cursor, Read};
-use std::rc::Rc;
+use std::ops::Deref;
 use std::os::unix::fs::FileExt;
+use std::sync::Arc;
 use super::Result;
 
-pub enum SliceFactory<'a> {
+pub enum SliceFactory {
     HeapStorage(Bytes),
-    MmapStorage(&'a Mmap),
+    MmapStorage(MMapWrap),
     StdioStorage(FileWrap),
 }
 
@@ -23,16 +24,16 @@ pub fn readybuf(size: usize) -> BytesMut {
     b
 }
 
-impl<'a> SliceFactory<'a> {
-    pub fn load(mut f: File) -> Result<SliceFactory<'a>> {
+impl SliceFactory {
+    pub fn load(mut f: File) -> Result<SliceFactory> {
         let mut buffer = Vec::new();
         f.read_to_end(&mut buffer)?;
         Ok(SliceFactory::HeapStorage(Bytes::from(buffer)))
     }
 
-    pub fn make_map(path: &str) -> Result<Mmap> {
+    pub fn make_map(path: &str) -> Result<SliceFactory> {
         let f = File::open(path)?;
-        let mmap: Mmap = unsafe { MmapOptions::new().map_private(&f)? };
+        let mmap: Mmap = unsafe { MmapOptions::new().map(&f)? };
 
         let mut buf = [0u8; BUF_LEN];
         let mut count = 0;
@@ -62,10 +63,10 @@ impl<'a> SliceFactory<'a> {
             md5.result_str()
         );
 
-        Ok(mmap)
+        Ok(SliceFactory::MmapStorage(MMapWrap::new(mmap)))
     }
 
-    pub fn make_filewrap(f: File) -> Result<SliceFactory<'a>> {
+    pub fn make_filewrap(f: File) -> Result<SliceFactory> {
         Ok(SliceFactory::StdioStorage(FileWrap::new(f)))
     }
 
@@ -90,13 +91,37 @@ impl<'a> SliceFactory<'a> {
     }
 }
 
-impl<'a> Clone for SliceFactory<'a> {
+impl Clone for SliceFactory {
     fn clone(&self) -> Self {
         match self {
             SliceFactory::HeapStorage(bytes) => SliceFactory::HeapStorage(bytes.clone()),
-            SliceFactory::MmapStorage(mmap) => SliceFactory::MmapStorage(mmap),
+            SliceFactory::MmapStorage(mmap) => SliceFactory::MmapStorage(mmap.clone()),
             SliceFactory::StdioStorage(fw) => SliceFactory::StdioStorage(fw.clone()),
         }
+    }
+}
+
+pub struct MMapWrap {
+    inner: Arc<Mmap>
+}
+
+impl MMapWrap {
+    fn new(m: Mmap) -> MMapWrap {
+        MMapWrap{inner: Arc::new(m)}
+    }
+}
+
+impl Deref for MMapWrap {
+    type Target = Mmap;
+
+    fn deref(&self) -> &<Self as Deref>::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl Clone for MMapWrap {
+    fn clone(&self) -> Self {
+        MMapWrap{inner: self.inner.clone()}
     }
 }
 
