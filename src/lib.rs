@@ -15,3 +15,5 @@ extern crate crypto;
 extern crate libc;
 
 pub mod cdb;
+
+pub use cdb::cdb_c::{cdb_rs_create, CDBHandle};

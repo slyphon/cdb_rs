@@ -156,9 +156,9 @@ impl<'a> From<&'a BMString> for String {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::prelude::*;
     use super::*;
     use tempfile;
-    use std::io::prelude::*;
 
     fn assert_ok<T>(f: T)
     where
