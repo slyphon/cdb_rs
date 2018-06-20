@@ -195,6 +195,20 @@ impl Clone for CDB {
 }
 
 impl CDB {
+    pub fn new(sf: SliceFactory) -> CDB { CDB{data: sf} }
+
+    pub fn stdio(path: &str) -> Result<CDB> {
+        Ok(CDB::new(SliceFactory::make_filewrap(path)?))
+    }
+
+    pub fn mmap(path: &str) -> Result<CDB> {
+        Ok(CDB::new(SliceFactory::make_map(path)?))
+    }
+
+    pub fn load(path: &str) -> Result<CDB> {
+        Ok(CDB::new(SliceFactory::load(path)?))
+    }
+
     pub fn kvs_iter(&self) -> Result<KVIter> {
         Ok(KVIter::new(Box::new(self.clone()))?)
     }
@@ -217,7 +231,6 @@ impl CDB {
         Ok(Bucket{ptr, num_ents})
     }
 
-    pub fn new(sf: SliceFactory) -> CDB { CDB{data: sf} }
 
 
     // returns the index entry at absolute position 'pos' in the db
@@ -334,8 +347,7 @@ mod tests {
             }
         }).unwrap();
 
-        let f = File::open(path)?;
-        let sf = self::storage::SliceFactory::load(f)?;
+        let sf = self::storage::SliceFactory::load(path.to_str().unwrap())?;
 
         Ok(sf)
     }

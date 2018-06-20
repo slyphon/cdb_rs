@@ -6,7 +6,6 @@ extern crate env_logger;
 extern crate memmap;
 
 use std::time::Duration;
-use std::fs::File;
 
 use cdb_rs::cdb;
 use cdb_rs::cdb::storage::SliceFactory;
@@ -28,11 +27,10 @@ fn randoread(filename: &str, config: &RandoConfig) -> Result<()> {
             cdb::CDB::new(SliceFactory::make_map(filename)?)
         } else {
             {
-                let f = File::open(filename)?;
                 if config.use_stdio {
-                    sf = SliceFactory::make_filewrap(f)?;
+                    sf = SliceFactory::make_filewrap(filename)?;
                 } else {
-                    sf = SliceFactory::load(f)?;
+                    sf = SliceFactory::load(filename)?;
                 }
             }
             cdb::CDB::new(sf)

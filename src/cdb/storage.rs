@@ -25,7 +25,8 @@ pub fn readybuf(size: usize) -> BytesMut {
 }
 
 impl SliceFactory {
-    pub fn load(mut f: File) -> Result<SliceFactory> {
+    pub fn load(path: &str) -> Result<SliceFactory> {
+        let mut f = File::open(path)?;
         let mut buffer = Vec::new();
         f.read_to_end(&mut buffer)?;
         Ok(SliceFactory::HeapStorage(Bytes::from(buffer)))
@@ -66,8 +67,8 @@ impl SliceFactory {
         Ok(SliceFactory::MmapStorage(MMapWrap::new(mmap)))
     }
 
-    pub fn make_filewrap(f: File) -> Result<SliceFactory> {
-        Ok(SliceFactory::StdioStorage(FileWrap::new(f)))
+    pub fn make_filewrap(path: &str) -> Result<SliceFactory> {
+        Ok(SliceFactory::StdioStorage(FileWrap::open(path)?))
     }
 
     pub fn slice(&self, start: usize, end: usize) -> Result<Bytes> {
@@ -127,13 +128,19 @@ impl Clone for MMapWrap {
 
 pub struct FileWrap {
     inner: RefCell<File>,
+    path: String,
 }
 
 impl FileWrap {
-    fn new(f: File) -> Self {
+    fn new(f: File, path: &str) -> Self {
         FileWrap {
             inner: RefCell::new(f),
+            path: path.to_string(),
         }
+    }
+
+    fn open(path: &str) -> Result<Self> {
+        Ok(FileWrap::new(File::open(path)?, path))
     }
 
     fn slice(&self, start: usize, end: usize) -> Result<Bytes> {
@@ -149,20 +156,19 @@ impl FileWrap {
 
     #[cfg(test)]
     fn temp() -> Result<FileWrap> {
-        use tempfile;
-        let tmp: File = tempfile::tempfile()?;
-        let fw = FileWrap::new(tmp);
+        use tempfile::*;
+
+        let tmp = NamedTempFile::new()?;
+        let fw = FileWrap::new(tmp.as_file().try_clone()?, tmp.path().to_str().unwrap());
         Ok(fw)
     }
 }
 
 impl Clone for FileWrap {
     fn clone(&self) -> Self {
-        let f = self.inner.borrow_mut();
-        FileWrap::new(f.try_clone().unwrap())
+        FileWrap::open(self.path.as_ref()).unwrap()
     }
 }
-
 
 struct BMString(BytesMut);
 

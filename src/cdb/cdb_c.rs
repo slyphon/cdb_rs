@@ -1,41 +1,40 @@
 
-use std::path::Path;
 use std::ffi::CStr;
-use std::fs::File;
 use std::os::raw::c_char;
+
+use super::{CDB, Result};
 
 #[repr(C)]
 pub struct CDBHandle {
-
+    inner: Box<CDB>
 }
 
-const R_OK: i32 = 0;
-const R_ERR: i32 = -1;
+#[no_mangle]
+pub extern "C" fn cdb_rs_create(path: *const c_char) -> Option<*mut CDBHandle> {
+    assert!(!path.is_null());
+
+    let f = || -> Result<Box<CDBHandle>> {
+        let cpath = unsafe { CStr::from_ptr(path) };
+
+        let path = cpath.to_str()?;
+        let inner = Box::new(CDB::stdio(path)?);
+        let handle = CDBHandle{inner};
+
+        Ok(Box::new(handle))
+    };
+
+    match f() {
+        Ok(bhandle) => Some(Box::into_raw(bhandle)),
+        Err(err) => {
+            error!("failed to create CDBHandle: {:?}", err);
+            None
+        }
+    }
+}
 
 #[no_mangle]
-pub extern "C" fn cdb_rs_create(path: *const c_char, handle: *mut CDBHandle) -> i32 {
-    assert!(!path.is_null());
-    assert!(!handle.is_null());
-
-    let cpath = unsafe { CStr::from_ptr(path) };
-
-    let path =
-        match cpath.to_str() {
-            Ok(s) => Path::new(s),
-            Err(e) => {
-                error!("failed to convert path to string: {:?}, err: {:?}", cpath, e);
-                return R_ERR;
-            }
-        };
-
-    let fd =
-        match File::open(path) {
-            Ok(fp) => fp,
-            Err(e) => {
-                error!("failed to open file {:?}, {:?}", path, e);
-                return R_ERR;
-            }
-        };
-
-    R_OK
+pub extern "C" fn cdb_rs_destroy(handle: *mut CDBHandle) {
+    unsafe {
+        drop(Box::from_raw(handle));
+    }
 }
