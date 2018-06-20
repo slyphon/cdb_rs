@@ -32,7 +32,7 @@ impl<'a> SliceFactory<'a> {
 
     pub fn make_map(path: &str) -> Result<Mmap> {
         let f = File::open(path)?;
-        let mmap: Mmap = unsafe { MmapOptions::new().map_private(&f)? };
+        let mmap: Mmap = unsafe { MmapOptions::new().map(&f)? };
 
         let mut buf = [0u8; BUF_LEN];
         let mut count = 0;
